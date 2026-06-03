@@ -1,0 +1,30 @@
+# --- User data (NEVER tracked publicly) ---
+# All runtime state, diet/workout logs, foods, recipes, settings, exports
+# live under DATA/ and stay on each user's own machine. Per the
+# convention in CLAUDE.md, the app's data folder is gitignored by design.
+DATA/
+*.env
+
+# --- Build artifacts (PyInstaller .exe is rebuilt locally; not versioned) ---
+HealthTracker.exe
+FitnessTracker.exe
+build/
+dist/
+*.spec
+__pycache__/
+*.py[cod]
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Editor / OS / local tooling ---
+CLAUDE.md
+.claude/
+.vscode/
+.idea/
+*.code-workspace
+Thumbs.db
+desktop.ini
+.DS_Store
