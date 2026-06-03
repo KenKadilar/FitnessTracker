@@ -2046,6 +2046,66 @@ class UnifiedStore:
             "items": template.get("items", base.get("items", [])),
         }
 
+    def diet_template_source_path(self, template_name: str = "") -> Optional[Path]:
+        """File backing an editable diet template, or None if it is inline-only.
+
+        An empty/unknown name maps to the active diet_config.json (the
+        "Current diet_config.json" fallback option). External templates carry
+        their source path in the synthetic ``_external_template_file`` key that
+        diet_template_map() injects.
+        """
+        name = stringify_value(template_name)
+        if not name:
+            return self.diet_config_path
+        payload = self.diet_template_map().get(name)
+        if isinstance(payload, dict):
+            source = stringify_value(payload.get("_external_template_file"))
+            if source:
+                return Path(source)
+        return None
+
+    def save_diet_template(self, template_name: str, edited: Dict[str, Any]) -> Path:
+        """Write edited target/expenditure/notes/items back to a template file.
+
+        Unknown keys already in the file are preserved (schema-flexible round
+        trip). Editing a template only changes future blank days — saved logs
+        keep their per-day frozen snapshots, so history is never rewritten.
+        """
+        path = self.diet_template_source_path(template_name)
+        if path is None:
+            raise ValueError(
+                "This diet template is defined inline inside diet_config.json and "
+                "cannot be edited as a standalone file yet."
+            )
+
+        base: Dict[str, Any] = {}
+        if path.exists():
+            try:
+                loaded = read_json(path)
+                if isinstance(loaded, dict):
+                    base = loaded
+            except Exception:
+                base = {}
+
+        base.pop("_external_template_file", None)
+        base["target_calories"] = parse_float(edited.get("target_calories", 0), 0.0)
+        base["estimated_expenditure"] = parse_float(edited.get("estimated_expenditure", 0), 0.0)
+        base["notes"] = stringify_value(edited.get("notes", ""))
+        base["items"] = [item for item in edited.get("items", []) if isinstance(item, dict)]
+
+        normalized = self.normalize_diet_config(base)
+        self.backup_file(path)
+        write_json(path, normalized)
+
+        # When the active diet_config.json is the one being edited, keep the
+        # in-memory copy in sync so the checklist reflects the change at once.
+        try:
+            if path.resolve() == self.diet_config_path.resolve():
+                self.data["diet"]["config"] = normalized
+        except Exception:
+            pass
+        return path
+
     def get_diet_log(self, date_text: str) -> Dict[str, Any]:
         logs = self.data["diet"].setdefault("logs", {})
         if date_text not in logs:
@@ -2149,6 +2209,8 @@ class DietChecklistPage(QWidget):
         self.diet_template_combo.setMinimumWidth(180)
         self.make_default_diet_template_btn = QPushButton("Make default")
         self.make_default_diet_template_btn.setToolTip("Use this diet template automatically for new blank days.")
+        self.edit_diet_template_btn = QPushButton("Edit template…")
+        self.edit_diet_template_btn.setToolTip("Edit this diet template's items, target, and expenditure. Saved days keep their frozen snapshots.")
 
         top.addWidget(self.prev_btn)
         top.addWidget(self.today_btn)
@@ -2157,6 +2219,7 @@ class DietChecklistPage(QWidget):
         top.addWidget(QLabel("Diet template:"))
         top.addWidget(self.diet_template_combo)
         top.addWidget(self.make_default_diet_template_btn)
+        top.addWidget(self.edit_diet_template_btn)
         top.addStretch(1)
         top.addWidget(self.select_all_btn)
         top.addWidget(self.clear_selected_btn)
@@ -2264,6 +2327,7 @@ class DietChecklistPage(QWidget):
         self.reload_btn.clicked.connect(self.reload_diet_config_clicked)
         self.diet_template_combo.currentIndexChanged.connect(self.on_diet_template_changed)
         self.make_default_diet_template_btn.clicked.connect(self.make_selected_diet_template_default)
+        self.edit_diet_template_btn.clicked.connect(self.edit_selected_diet_template)
 
         # Free-text fields now autosave too, so the old Save button is unnecessary.
         self.weight_edit.textChanged.connect(self.on_free_text_changed)
@@ -2325,6 +2389,41 @@ class DietChecklistPage(QWidget):
             self,
             APP_TITLE,
             f"Default diet template set to:\n\n{label}\n\nNew blank days will use this automatically. Existing saved days keep their frozen snapshots."
+        )
+
+    def edit_selected_diet_template(self) -> None:
+        template_name = self.selected_diet_template_name()
+        if self.store.diet_template_source_path(template_name) is None:
+            QMessageBox.information(
+                self,
+                APP_TITLE,
+                "This diet template is defined inline inside diet_config.json and can't be edited in-app yet.\n\n"
+                "Edit it via the JSON file, or create a standalone template instead.",
+            )
+            return
+
+        config = self.store.diet_config_for_template(template_name)
+        dialog = DietTemplateEditDialog(self, template_name, config)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            self.store.save_diet_template(template_name, dialog.get_config())
+        except Exception as exc:
+            QMessageBox.warning(self, APP_TITLE, f"Could not save the diet template.\n\n{exc}")
+            return
+
+        # Reload split files so the edited template/config is picked up, then
+        # rebuild the *visible* checklist from current config. Saved days keep
+        # their frozen per-day snapshots — only blank/unsaved days change.
+        self.store.load_split_files()
+        self.refresh_diet_template_combo(template_name)
+        self.rebuild_items(force_current_config=True)
+        QMessageBox.information(
+            self,
+            APP_TITLE,
+            "Diet template saved. Previously logged days keep their frozen items; "
+            "new blank days use the updated template.",
         )
 
     def set_diet_template_combo(self, template_name: str) -> None:
@@ -3206,6 +3305,183 @@ class FoodCalculatorPage(QWidget):
             if unit_text != "g"
             else f"{format_number(kcal, 1)} kcal"
         )
+
+
+# -----------------------------
+# Diet template editor
+# -----------------------------
+class DietTemplateEditDialog(QDialog):
+    """In-app editor for a diet template (the JSON the dropdown points at).
+
+    Mirrors RecipeEditDialog's shape. Saving writes back through
+    UnifiedStore.save_diet_template, which re-validates via
+    normalize_diet_config and preserves unknown fields.
+    """
+
+    ITEM_COLUMNS = ["ID", "Name", "Amount", "Unit", "Calories", "Category", "Notes"]
+    KNOWN_ITEM_KEYS = {"id", "name", "amount", "unit", "calories", "category", "notes"}
+
+    def __init__(self, parent: QWidget, template_name: str, config: Optional[dict] = None):
+        super().__init__(parent)
+        self.template_name = stringify_value(template_name)
+        self.setWindowTitle(f"Diet template editor — {self.template_name or 'Current diet config'}")
+        self.resize(900, 650)
+        config = config or {}
+
+        layout = QVBoxLayout(self)
+
+        info_box = QGroupBox("Template summary")
+        info_grid = QGridLayout(info_box)
+
+        self.name_label = QLabel(self.template_name or "Current diet_config.json")
+        self.name_label.setStyleSheet("font-weight: bold;")
+        self.target_edit = QLineEdit(format_number(config.get("target_calories", 0), 2))
+        self.target_edit.setPlaceholderText("Target calories")
+        self.expenditure_edit = QLineEdit(format_number(config.get("estimated_expenditure", 0), 2))
+        self.expenditure_edit.setPlaceholderText("Estimated expenditure")
+
+        info_grid.addWidget(QLabel("Template"), 0, 0)
+        info_grid.addWidget(self.name_label, 0, 1, 1, 3)
+        info_grid.addWidget(QLabel("Target calories"), 1, 0)
+        info_grid.addWidget(self.target_edit, 1, 1)
+        info_grid.addWidget(QLabel("Estimated expenditure"), 1, 2)
+        info_grid.addWidget(self.expenditure_edit, 1, 3)
+        layout.addWidget(info_box)
+
+        self.items_table = QTableWidget(0, len(self.ITEM_COLUMNS))
+        self.items_table.setHorizontalHeaderLabels(self.ITEM_COLUMNS)
+        header = self.items_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        self.items_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.items_table.setEditTriggers(
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.SelectedClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+        )
+        layout.addWidget(QLabel("Items (ID is auto-generated from the name when left blank)"))
+        layout.addWidget(self.items_table, 1)
+
+        item_buttons = QHBoxLayout()
+        self.add_item_btn = QPushButton("Add item")
+        self.remove_item_btn = QPushButton("Remove selected")
+        self.move_up_btn = QPushButton("Move up")
+        self.move_down_btn = QPushButton("Move down")
+        item_buttons.addWidget(self.add_item_btn)
+        item_buttons.addWidget(self.remove_item_btn)
+        item_buttons.addStretch(1)
+        item_buttons.addWidget(self.move_up_btn)
+        item_buttons.addWidget(self.move_down_btn)
+        layout.addLayout(item_buttons)
+
+        self.notes_edit = QPlainTextEdit()
+        self.notes_edit.setPlaceholderText("Optional template notes")
+        self.notes_edit.setFixedHeight(80)
+        self.notes_edit.setPlainText(stringify_value(config.get("notes", "")))
+        layout.addWidget(QLabel("Notes"))
+        layout.addWidget(self.notes_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._render_items([item for item in config.get("items", []) if isinstance(item, dict)])
+        if self.items_table.rowCount() == 0:
+            self.add_item_row({})
+
+        self.add_item_btn.clicked.connect(lambda: self.add_item_row({}))
+        self.remove_item_btn.clicked.connect(self.remove_selected_item)
+        self.move_up_btn.clicked.connect(lambda: self.move_selected(-1))
+        self.move_down_btn.clicked.connect(lambda: self.move_selected(1))
+
+    def add_item_row(self, item: dict) -> None:
+        row = self.items_table.rowCount()
+        self.items_table.insertRow(row)
+        id_item = QTableWidgetItem(stringify_value(item.get("id", "")))
+        id_item.setFlags(id_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        extra = {k: v for k, v in item.items() if k not in self.KNOWN_ITEM_KEYS}
+        id_item.setData(Qt.ItemDataRole.UserRole, extra)
+        self.items_table.setItem(row, 0, id_item)
+        values = [
+            stringify_value(item.get("name", "")),
+            format_number(item.get("amount", 0), 2),
+            stringify_value(item.get("unit", "")),
+            format_number(item.get("calories", 0), 2),
+            stringify_value(item.get("category", "")) or "Other",
+            stringify_value(item.get("notes", "")),
+        ]
+        for offset, value in enumerate(values, start=1):
+            self.items_table.setItem(row, offset, QTableWidgetItem(str(value)))
+
+    def _render_items(self, items: List[dict]) -> None:
+        self.items_table.setRowCount(0)
+        for item in items:
+            self.add_item_row(item)
+
+    def cell_text(self, row: int, col: int) -> str:
+        item = self.items_table.item(row, col)
+        return item.text().strip() if item else ""
+
+    def _collect_rows(self) -> List[dict]:
+        rows: List[dict] = []
+        for row in range(self.items_table.rowCount()):
+            id_item = self.items_table.item(row, 0)
+            extra = id_item.data(Qt.ItemDataRole.UserRole) if id_item else {}
+            if not isinstance(extra, dict):
+                extra = {}
+            item = dict(extra)
+            item["id"] = self.cell_text(row, 0)
+            item["name"] = self.cell_text(row, 1)
+            item["amount"] = parse_float(self.cell_text(row, 2), 0.0)
+            item["unit"] = self.cell_text(row, 3)
+            item["calories"] = parse_float(self.cell_text(row, 4), 0.0)
+            item["category"] = self.cell_text(row, 5) or "Other"
+            notes = self.cell_text(row, 6)
+            if notes or "notes" in extra:
+                item["notes"] = notes
+            rows.append(item)
+        return rows
+
+    def remove_selected_item(self) -> None:
+        rows = sorted({index.row() for index in self.items_table.selectedIndexes()}, reverse=True)
+        for row in rows:
+            self.items_table.removeRow(row)
+
+    def move_selected(self, delta: int) -> None:
+        selected = sorted({index.row() for index in self.items_table.selectedIndexes()})
+        if len(selected) != 1:
+            return
+        row = selected[0]
+        target = row + delta
+        if target < 0 or target >= self.items_table.rowCount():
+            return
+        data = self._collect_rows()
+        data[row], data[target] = data[target], data[row]
+        self._render_items(data)
+        self.items_table.selectRow(target)
+
+    def items(self) -> List[dict]:
+        return [item for item in self._collect_rows() if stringify_value(item.get("name"))]
+
+    def accept(self) -> None:
+        if not self.items():
+            QMessageBox.information(self, APP_TITLE, "Add at least one item with a name.")
+            return
+        super().accept()
+
+    def get_config(self) -> dict:
+        return {
+            "target_calories": parse_float(self.target_edit.text(), 0.0),
+            "estimated_expenditure": parse_float(self.expenditure_edit.text(), 0.0),
+            "notes": self.notes_edit.toPlainText().strip(),
+            "items": self.items(),
+        }
 
 
 # -----------------------------
