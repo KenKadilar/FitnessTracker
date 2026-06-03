@@ -10,6 +10,9 @@ JSON, no cloud account.
 
 - **Diet checklist** with per-day frozen snapshots, so editing today's
   template never rewrites yesterday's logged values.
+- **In-app template editors** — build and edit diet and workout templates
+  from the UI (items, targets, exercises, HIIT blocks, rest), plus
+  create / rename / delete templates. No JSON editing required.
 - **Workout templates + history** (also snapshot-based for the same reason),
   HIIT timer with custom beep, in-tab rest timer.
 - **Food calorie calculator** + a **recipes** tab with an in-place editor.
@@ -38,8 +41,9 @@ python health_tracker.py
 
 That's it. The app creates a `DATA/HealthTracker/` folder next to the
 script (or next to the `.exe` when packaged) for your diet logs, workout
-history, recipes, foods, and templates. Edit the JSON files there directly,
-or use the in-app editors.
+history, recipes, foods, and templates. Manage everything from the in-app
+editors — diet/workout templates, recipes, and foods. Power users can also
+edit the JSON files in that folder directly; the app normalizes them on load.
 
 ## Build a standalone `.exe` (optional, Windows)
 

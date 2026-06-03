@@ -2760,6 +2760,22 @@ class DietChecklistPage(QWidget):
         snapshot_note.setStyleSheet("color: #888888; font-size: 11px;")
         self.items_layout.addWidget(snapshot_note)
 
+        # First-run / empty template: don't strand the user on a blank checklist —
+        # offer a clear way into the editor instead.
+        if not self.rendered_items:
+            empty = QLabel("This diet template has no items yet.")
+            empty.setStyleSheet("font-size: 14px; font-weight: bold; margin-top: 16px;")
+            empty.setWordWrap(True)
+            self.items_layout.addWidget(empty)
+            create_btn = QPushButton("Create your first item →")
+            create_btn.setToolTip("Open the template editor to add diet items.")
+            create_btn.clicked.connect(self.edit_selected_diet_template)
+            self.items_layout.addWidget(create_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+            self.items_layout.addStretch(1)
+            if load_after:
+                self.load_day(date_text, rebuild_if_needed=False)
+            return
+
         for category in categories:
             header = QLabel(category)
             header.setStyleSheet("font-size: 14px; font-weight: bold; margin-top: 10px;")
@@ -4977,12 +4993,23 @@ class WorkoutBuilder(QWidget):
         else:
             self.clear_rows()
             label = QLabel(
-                "No workout templates are loaded yet.\n\n"
-                "Add templates to DATA/HealthTracker/WorkoutTracker/workout_templates.json "
-                "(File → Open data folder), then reopen this tab."
+                "No workout templates yet.\n\n"
+                "Create your first one to start logging workouts — no JSON editing required."
             )
             label.setWordWrap(True)
+            label.setStyleSheet("font-size: 14px; margin-top: 16px;")
             self.rows_layout.addWidget(label)
+            create_btn = QPushButton("Create your first template →")
+            create_btn.setToolTip("Create a new workout template and open the editor.")
+            create_btn.clicked.connect(self.new_workout_template)
+            self.rows_layout.addWidget(create_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+            power_user = QLabel(
+                "Power users can also add templates directly to "
+                "DATA/HealthTracker/WorkoutTracker/workout_templates.json (File → Open data folder)."
+            )
+            power_user.setWordWrap(True)
+            power_user.setStyleSheet("color: #888888; font-size: 11px; margin-top: 6px;")
+            self.rows_layout.addWidget(power_user)
             self.rows_layout.addStretch(1)
             self.update_progress()
 
