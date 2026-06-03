@@ -1,34 +1,27 @@
 # Home Fitness Tracker
 
-A single-file PyQt6 desktop app for tracking diet (calorie checklist),
-workouts, recipes, a food calorie calculator, and a weekly history overview —
-with an embedded mobile PWA so you can check off items from your phone
-without installing anything. All data lives on your own machine, plain
-JSON, no cloud account.
+A single-file PyQt6 desktop app for tracking diet, workouts, recipes, and a
+food calorie calculator — with an installable phone app (PWA) so you can tick
+off your diet checklist from anywhere. All data lives on your own machine as
+plain JSON; no cloud account.
 
 ## Features
 
-- **Diet checklist** with per-day frozen snapshots, so editing today's
-  template never rewrites yesterday's logged values.
-- **In-app template editors** — build and edit diet and workout templates
-  from the UI (items, targets, exercises, HIIT blocks, rest), plus
-  create / rename / delete templates. No JSON editing required.
-- **Workout templates + history** (also snapshot-based for the same reason),
-  HIIT timer with custom beep, in-tab rest timer.
-- **Food calorie calculator** + a **recipes** tab with an in-place editor.
-- **Daily Overview** — weekly grid showing diet template name, calories,
-  deficit/surplus, and workouts at a glance.
-- **Phone access via an embedded HTTP server + PWA** — installable on
-  iOS/Android, full diet checklist + food/workout/recipes/history. Works on
-  your LAN out of the box; an optional Cloudflare-tunnel path adds
-  HTTPS-from-anywhere with email-PIN gating (see below).
-- **PDF + Markdown exports** of diet and workout history.
+- **Diet checklist** with per-day frozen snapshots — editing today's template
+  never rewrites yesterday's logged numbers.
+- **In-app editors** for diet and workout templates (plus recipes and foods) —
+  build, edit, rename, and delete everything from the UI; no JSON required.
+- **Workout templates + history** with a HIIT timer and an in-tab rest timer.
+- **Phone access** via an embedded server + installable PWA — works on your LAN
+  out of the box, with an optional HTTPS-from-anywhere path.
+- **Daily Overview** weekly grid, plus **PDF / Markdown exports**.
+
+See [CHANGELOG.md](CHANGELOG.md) for the engineering log.
 
 ## Tech
 
-Python 3.12, PyQt6, stdlib `ThreadingHTTPServer`, vanilla JS PWA — no build
-step, no framework, no cloud dependency. Optional: `cloudflared` for the
-phone-from-anywhere path.
+Python 3.12, PyQt6, stdlib `ThreadingHTTPServer`, vanilla-JS PWA — no build
+step, no framework, no cloud dependency.
 
 ## Install & run
 
@@ -39,11 +32,21 @@ pip install -r requirements.txt
 python health_tracker.py
 ```
 
-That's it. The app creates a `DATA/HealthTracker/` folder next to the
-script (or next to the `.exe` when packaged) for your diet logs, workout
-history, recipes, foods, and templates. Manage everything from the in-app
-editors — diet/workout templates, recipes, and foods. Power users can also
-edit the JSON files in that folder directly; the app normalizes them on load.
+The app creates a portable `DATA/HealthTracker/` folder next to the script
+(or beside the `.exe` when packaged) for your logs, history, recipes, and
+templates — copy the folder to take your data with you. Manage everything from
+the in-app editors; power users can also edit the JSON directly (the app
+normalizes defensively and backs up anything it can't read).
+
+## Phone access
+
+The app serves an installable PWA on your LAN at `http://<your-pc-ip>:20003/`
+(the URL shows in the status bar on launch) — Diet Checklist, Food Calculator,
+Recipes, Workout Log, and history. For HTTPS-from-anywhere, point a
+[Cloudflare named tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+at `http://localhost:20003` and set `CLOUDFLARE_TUNNEL_TOKEN` in a gitignored
+`DATA/HealthTracker/.env`. Set `PHONE_SERVER_ENABLED=0` to disable the phone
+server entirely.
 
 ## Build a standalone `.exe` (optional, Windows)
 
@@ -52,68 +55,17 @@ pyinstaller --onefile --windowed --name HealthTracker `
   --icon icon.ico health_tracker.py
 ```
 
-Keep `icon.ico` and `beep.wav` beside the resulting `.exe`; the app finds
-them automatically via the same resolver that handles dev mode.
+Keep `icon.ico` and `beep.wav` beside the resulting `.exe`; the app finds them
+automatically via the same resolver used in dev mode.
 
-## Phone access
+## Architecture
 
-The desktop app embeds a tiny HTTP server on `0.0.0.0:20003` and serves an
-installable PWA at `/`. **On your LAN**, point your phone's browser at
-`http://<your-pc-lan-ip>:20003/` — the status bar shows the URL on launch.
-The PWA covers: Diet Checklist (the main thing), Food Calculator,
-Recipes, Workout Log, Diet & Workout History.
-
-**For HTTPS from anywhere** (so the PWA actually installs as a real app),
-the recommended path is a [Cloudflare named tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-pointing `https://<your-subdomain>` → `http://localhost:20003`, gated by
-[Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/applications/)
-(email one-time PIN). The app auto-runs `cloudflared` when these are set in
-a gitignored `DATA/HealthTracker/.env`:
-
-```
-CLOUDFLARE_TUNNEL_TOKEN=eyJ...        # from your tunnel's "Run" command
-APP_PUBLIC_URL=https://your.subdomain # for the status-bar link
-```
-
-Set `PHONE_TUNNEL_ENABLED=0` (env var) to skip the tunnel and just use LAN.
-Set `PHONE_SERVER_ENABLED=0` to disable the phone server entirely.
-
-## Data layout
-
-All user data is portable and lives next to the script/exe:
-
-```
-DATA/HealthTracker/
-  recipes.json
-  foods.json
-  beep.wav                            # (resolver also finds it beside the script)
-  DietTracker/
-    diet_config.json                  # active diet
-    diet_logs.json                    # per-day checklist logs (your history)
-    diet_template_settings.json       # which template is "default"
-    diet_configs/*.json               # selectable templates
-  WorkoutTracker/
-    workout_templates.json
-    workout_history.json
-  backups/    exports/                # auto-generated
-  .env                                # optional secrets (tunnel token, etc.)
-```
-
-Copying or moving the folder takes your data with you. Files are
-hand-editable JSON; the app normalizes defensively on load and backs up
-anything it can't read.
-
-## Architecture (one file, three layers)
-
-1. **Module-level helpers** — parsing/formatting, snapshot logic, PDF/HTML
-   export, workout template normalization.
-2. **`UnifiedStore`** — single in-memory `self.data` dict that persists to
-   separate JSON files under `DATA/HealthTracker/`.
-3. **Qt UI pages** — one `QWidget` per tab; `MainWindow` wires them
-   together plus the embedded HTTP server.
-
-See [CHANGELOG.md](CHANGELOG.md) for the engineering log.
+One file, three layers: module-level helpers (parsing/formatting, snapshot
+logic, PDF/HTML export) → **`UnifiedStore`**, one in-memory `self.data` dict
+persisted to split JSON files under `DATA/HealthTracker/` → **Qt UI pages**,
+one `QWidget` per tab, with `MainWindow` wiring them plus the embedded HTTP
+server. See [CHANGELOG.md](CHANGELOG.md) for the deeper engineering narrative.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Can KADILAR.
