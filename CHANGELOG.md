@@ -2,6 +2,40 @@
 
 All notable changes to Home Fitness Tracker.
 
+## [0.2.0] — In-app template editors
+
+The diet and workout templates are now fully editable from the UI — no
+JSON editing required. Built mirroring the existing `RecipeEditDialog`
+shape.
+
+- **Diet Editor** (`DietTemplateEditDialog`) — an "Edit template…" button
+  on the Diet Checklist tab opens an editor for the active template's
+  target calories, estimated expenditure, notes, and item table
+  (ID / Name / Amount / Unit / Calories / Category / Notes) with
+  add / remove / move-up / move-down. Saving re-validates through
+  `normalize_diet_config`, backs the file up first, and preserves unknown
+  JSON fields. The per-day snapshot rule is upheld: editing a template only
+  changes future blank days — saved days keep their frozen item / target /
+  expenditure snapshots.
+- **Workout Editor** (`WorkoutTemplateEditDialog`) — an "Edit template…"
+  button on the Workout Log tab edits exercises (Name / Sets × Reps /
+  Target Load / Notes) plus the template's default rest seconds and warm-up
+  notes. HIIT-block and other extra fields are exposed in an
+  "Advanced (JSON)" column so they stay visible and editable, validated on
+  save so HIIT data is never silently dropped; unknown fields round-trip
+  via `ExerciseDef.extra`. Logged workouts keep their own snapshots.
+- **Template management** — a "Manage ▾" menu on both tabs adds
+  New / Rename / Delete. New opens the editor on an empty template; rename
+  and delete keep the default-template and last-selected references in sync
+  and leave saved history's frozen snapshots intact. The active
+  `diet_config.json` fallback is protected from rename / delete.
+- **First-run empty states** — the Workout Log tab shows a "Create your
+  first template →" button instead of a JSON-editing instruction, and the
+  Diet Checklist tab offers a "Create your first item →" button when a
+  template has no items.
+- README trimmed for a faster skim; JSON editing reframed as the
+  power-user option rather than the default workflow.
+
 ## [0.1.0] — Initial public release
 
 Single-file PyQt6 desktop app with these capabilities at v0.1:

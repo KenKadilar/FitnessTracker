@@ -62,7 +62,7 @@ except Exception:  # QtMultimedia may be unavailable in some PyQt installs; fall
     QSoundEffect = None  # type: ignore
 
 APP_TITLE = "Home Fitness Tracker"
-APP_VERSION = "5.5"
+APP_VERSION = "0.2"
 APP_ICON_FILE = "icon.ico"
 BEEP_SOUND_FILE = "beep.wav"
 DATA_DIR_NAME = "DATA"
