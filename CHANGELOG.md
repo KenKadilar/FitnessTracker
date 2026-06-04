@@ -8,7 +8,7 @@ The diet and workout templates are now fully editable from the UI, no
 JSON editing required. Built mirroring the existing `RecipeEditDialog`
 shape.
 
-- **Diet Editor** (`DietTemplateEditDialog`): an "Edit template…" button
+- **Diet Editor** (`DietTemplateEditDialog`): an "Edit template..." button
   on the Diet Checklist tab opens an editor for the active template's
   target calories, estimated expenditure, notes, and item table
   (ID / Name / Amount / Unit / Calories / Category / Notes) with
@@ -17,7 +17,7 @@ shape.
   JSON fields. The per-day snapshot rule is upheld: editing a template only
   changes future blank days, saved days keep their frozen item / target /
   expenditure snapshots.
-- **Workout Editor** (`WorkoutTemplateEditDialog`): an "Edit template…"
+- **Workout Editor** (`WorkoutTemplateEditDialog`): an "Edit template..."
   button on the Workout Log tab edits exercises (Name / Sets × Reps /
   Target Load / Notes) plus the template's default rest seconds and warm-up
   notes. HIIT-block and other extra fields are exposed in an
