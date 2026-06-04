@@ -5,6 +5,8 @@ food calorie calculator, with an installable phone app (PWA) so you can tick
 off your diet checklist from anywhere. All data lives on your own machine as
 plain JSON; no cloud account.
 
+https://github.com/user-attachments/assets/4cf93a86-0f0c-4e3b-9195-a4b51d91954c
+
 ## Features
 
 - **Diet checklist** with per-day frozen snapshots, editing today's template
