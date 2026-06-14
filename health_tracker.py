@@ -86,7 +86,7 @@ DEFAULT_DIET_CONFIG: Dict[str, Any] = {
     "estimated_expenditure": 2000,
     "notes": (
         "Example starter template. Replace these items with your own foods, "
-        "supplements, and targets — either through the app's editor or by "
+        "supplements, and targets, either through the app's editor or by "
         "editing DATA/HealthTracker/DietTracker/diet_config.json directly."
     ),
     "items": [
@@ -523,7 +523,7 @@ def diet_item_checklist_label(item: Dict[str, Any]) -> str:
         amount_text = stringify_value(amount)
 
     suffix = f"{amount_text} {unit}".strip()
-    return f"{label} — {suffix}" if suffix else label
+    return f"{label}: {suffix}" if suffix else label
 
 
 def diet_config_for_log(store: Any, date_text: str) -> Dict[str, Any]:
@@ -603,7 +603,7 @@ def short_diet_template_label(name: Any) -> str:
     """Compact label for the weekly overview: strips a leading 'YYYY MM DD'
     from a saved diet_template_name, leaving just the descriptive part.
 
-    E.g. '2026 05 23 IronMeatDay' → 'IronMeatDay'. The date column header
+    E.g. '2026 05 23 IronMeatDay' -> 'IronMeatDay'. The date column header
     already shows the day, so repeating it inside the cell wastes space.
     Falls back to the full name when there's nothing descriptive after the date.
     """
@@ -628,7 +628,7 @@ def compute_diet_energy(
     """Single source of truth for the diet calorie/deficit math.
 
     The Diet Checklist, Diet History, and Daily Overview all call this so they
-    can never disagree on the formula. This is ONLY arithmetic — which items,
+    can never disagree on the formula. This is ONLY arithmetic: which items,
     target, and expenditure apply to a given day is still resolved by the
     diet_*_for_log / diet_log_items helpers, so saved days keep their frozen
     per-day snapshots (the thing that historically broke when diets changed).
@@ -647,7 +647,7 @@ def compute_diet_energy(
         "remaining": max(target - adjusted_consumed, 0.0),
         "over": max(adjusted_consumed - target, 0.0),
         # Raw signed balance (>0 deficit, <0 surplus) kept for the History /
-        # PDF / Overview code that already uses it — unchanged on purpose.
+        # PDF / Overview code that already uses it, unchanged on purpose.
         # The Diet summary + phone use the split, never-negative pair below.
         "deficit": deficit_value,
         "deficit_pos": max(deficit_value, 0.0),
@@ -683,7 +683,7 @@ def compact_pdf_text(value: Any, max_chars: int = 180) -> str:
     # Collapse multi-line notes into one compact line to save vertical space.
     text = re.sub(r"\s+", " ", text)
     if len(text) > max_chars:
-        text = text[: max(0, max_chars - 1)].rstrip() + "…"
+        text = text[: max(0, max_chars - 1)].rstrip() + "..."
     return html_escape_text(text)
 
 
@@ -2069,7 +2069,7 @@ class UnifiedStore:
         """Write edited target/expenditure/notes/items back to a template file.
 
         Unknown keys already in the file are preserved (schema-flexible round
-        trip). Editing a template only changes future blank days — saved logs
+        trip). Editing a template only changes future blank days; saved logs
         keep their per-day frozen snapshots, so history is never rewritten.
         """
         path = self.diet_template_source_path(template_name)
@@ -2336,14 +2336,14 @@ class DietChecklistPage(QWidget):
         self.diet_template_combo.setMinimumWidth(180)
         self.make_default_diet_template_btn = QPushButton("Make default")
         self.make_default_diet_template_btn.setToolTip("Use this diet template automatically for new blank days.")
-        self.edit_diet_template_btn = QPushButton("Edit template…")
+        self.edit_diet_template_btn = QPushButton("Edit template...")
         self.edit_diet_template_btn.setToolTip("Edit this diet template's items, target, and expenditure. Saved days keep their frozen snapshots.")
         self.manage_diet_template_btn = QPushButton("Manage ▾")
         self.manage_diet_template_btn.setToolTip("Create, rename, or delete diet templates.")
         manage_menu = QMenu(self.manage_diet_template_btn)
-        self.new_diet_template_action = manage_menu.addAction("New template…")
-        self.rename_diet_template_action = manage_menu.addAction("Rename template…")
-        self.delete_diet_template_action = manage_menu.addAction("Delete template…")
+        self.new_diet_template_action = manage_menu.addAction("New template...")
+        self.rename_diet_template_action = manage_menu.addAction("Rename template...")
+        self.delete_diet_template_action = manage_menu.addAction("Delete template...")
         self.manage_diet_template_btn.setMenu(manage_menu)
 
         top.addWidget(self.prev_btn)
@@ -2553,7 +2553,7 @@ class DietChecklistPage(QWidget):
 
         # Reload split files so the edited template/config is picked up, then
         # rebuild the *visible* checklist from current config. Saved days keep
-        # their frozen per-day snapshots — only blank/unsaved days change.
+        # their frozen per-day snapshots; only blank/unsaved days change.
         self.store.load_split_files()
         self.refresh_diet_template_combo(template_name)
         self.rebuild_items(force_current_config=True)
@@ -2584,7 +2584,7 @@ class DietChecklistPage(QWidget):
             except Exception as exc:
                 QMessageBox.warning(self, APP_TITLE, f"Could not save the diet template.\n\n{exc}")
         else:
-            # Cancelled before adding anything — drop the empty starter file.
+            # Cancelled before adding anything; drop the empty starter file.
             try:
                 if path.exists():
                     path.unlink()
@@ -2760,7 +2760,7 @@ class DietChecklistPage(QWidget):
         snapshot_note.setStyleSheet("color: #888888; font-size: 11px;")
         self.items_layout.addWidget(snapshot_note)
 
-        # First-run / empty template: don't strand the user on a blank checklist —
+        # First-run / empty template: don't strand the user on a blank checklist,
         # offer a clear way into the editor instead.
         if not self.rendered_items:
             empty = QLabel("This diet template has no items yet.")
@@ -3149,7 +3149,7 @@ class DietHistoryPage(QWidget):
             is_checked = bool(checked.get(item_id, False))
             mark = "✓" if is_checked else " "
             kcal = float(item.get("calories", 0))
-            lines.append(f"[{mark}] {item.get('name', item_id)} — {kcal:.2f} kcal\n")
+            lines.append(f"[{mark}] {item.get('name', item_id)}: {kcal:.2f} kcal\n")
 
         lines.append(f"\nChecklist calories eaten: {summary['checklist_consumed']:.0f} kcal\n")
         lines.append(f"Additional calories: {summary['additional_calories']:.0f} kcal\n")
@@ -3169,7 +3169,7 @@ class DietHistoryPage(QWidget):
         checked = log.get("checked", {})
         summary = self.summary_for_date(date_text)
 
-        lines = [f"# Diet Log — {date_text}\n\n"]
+        lines = [f"# Diet Log: {date_text}\n\n"]
         if log.get("diet_template_name"):
             lines.append(f"- **Diet template:** {log.get('diet_template_name')}\n")
         lines.append(f"- **Diet item source:** {diet_snapshot_status(self.store, date_text)}\n")
@@ -3399,7 +3399,7 @@ class FoodCalculatorPage(QWidget):
         self.amount_edit.setText("100")
         self.amount_edit.setMaximumWidth(120)
         self.unit_combo = QComboBox()
-        self.result_label = QLabel("—")
+        self.result_label = QLabel("-")
         self.result_label.setStyleSheet("font-size: 16px; font-weight: bold;")
         self.reload_btn = QPushButton("Reload foods.json")
         self.open_btn = QPushButton("Open DATA folder")
@@ -3554,7 +3554,7 @@ class DietTemplateEditDialog(QDialog):
     def __init__(self, parent: QWidget, template_name: str, config: Optional[dict] = None):
         super().__init__(parent)
         self.template_name = stringify_value(template_name)
-        self.setWindowTitle(f"Diet template editor — {self.template_name or 'Current diet config'}")
+        self.setWindowTitle(f"Diet template editor: {self.template_name or 'Current diet config'}")
         self.resize(900, 650)
         config = config or {}
 
@@ -3722,7 +3722,7 @@ class WorkoutTemplateEditDialog(QDialog):
 
     Mirrors the diet editor. Exercises are edited in a table (Name,
     Sets × Reps, Target Load, Notes) with an "Advanced (JSON)" column that
-    exposes HIIT/extra fields (type, steps, rounds, step_seconds, …) as raw
+    exposes HIIT/extra fields (type, steps, rounds, step_seconds, ...) as raw
     JSON so they stay visible and editable. Any unknown fields the user had
     in the JSON survive a round trip via ExerciseDef.extra.
     """
@@ -3733,7 +3733,7 @@ class WorkoutTemplateEditDialog(QDialog):
     def __init__(self, parent: QWidget, template: WorkoutTemplate):
         super().__init__(parent)
         self.template = template
-        self.setWindowTitle(f"Workout template editor — {template.name}")
+        self.setWindowTitle(f"Workout template editor: {template.name}")
         self.resize(960, 660)
 
         layout = QVBoxLayout(self)
@@ -3784,7 +3784,7 @@ class WorkoutTemplateEditDialog(QDialog):
         layout.addLayout(ex_buttons)
 
         advanced_hint = QLabel(
-            "Advanced (JSON) holds extra/HIIT fields (type, steps, rounds, step_seconds, …). "
+            "Advanced (JSON) holds extra/HIIT fields (type, steps, rounds, step_seconds, ...). "
             "Leave it as {} for a plain strength exercise."
         )
         advanced_hint.setStyleSheet("color: #888888; font-size: 11px;")
@@ -4871,7 +4871,7 @@ class WorkoutBuilder(QWidget):
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         # Tracks the date our code last wrote into the picker. Lets us bump to
         # "today" on tab activation only when the user hasn't manually picked
-        # a different date — see refresh_today_if_stale().
+        # a different date; see refresh_today_if_stale().
         self._last_app_set_date = self.date_edit.date()
 
         self.warmup_notes = QPlainTextEdit()
@@ -4881,14 +4881,14 @@ class WorkoutBuilder(QWidget):
 
         self.progress_label = QLabel("0 / 0 completed")
 
-        self.edit_template_btn = QPushButton("Edit template…")
+        self.edit_template_btn = QPushButton("Edit template...")
         self.edit_template_btn.setToolTip("Edit this workout template's exercises and rest. Saved workout history keeps its own snapshots.")
         self.manage_template_btn = QPushButton("Manage ▾")
         self.manage_template_btn.setToolTip("Create, rename, or delete workout templates.")
         manage_menu = QMenu(self.manage_template_btn)
-        self.new_template_action = manage_menu.addAction("New template…")
-        self.rename_template_action = manage_menu.addAction("Rename template…")
-        self.delete_template_action = manage_menu.addAction("Delete template…")
+        self.new_template_action = manage_menu.addAction("New template...")
+        self.rename_template_action = manage_menu.addAction("Rename template...")
+        self.delete_template_action = manage_menu.addAction("Delete template...")
         self.manage_template_btn.setMenu(manage_menu)
 
         header_layout.addWidget(QLabel("Template"), 0, 0)
@@ -4994,7 +4994,7 @@ class WorkoutBuilder(QWidget):
             self.clear_rows()
             label = QLabel(
                 "No workout templates yet.\n\n"
-                "Create your first one to start logging workouts — no JSON editing required."
+                "Create your first one to start logging workouts, no JSON editing required."
             )
             label.setWordWrap(True)
             label.setStyleSheet("font-size: 14px; margin-top: 16px;")
@@ -5005,7 +5005,7 @@ class WorkoutBuilder(QWidget):
             self.rows_layout.addWidget(create_btn, alignment=Qt.AlignmentFlag.AlignLeft)
             power_user = QLabel(
                 "Power users can also add templates directly to "
-                "DATA/HealthTracker/WorkoutTracker/workout_templates.json (File → Open data folder)."
+                "DATA/HealthTracker/WorkoutTracker/workout_templates.json (File > Open data folder)."
             )
             power_user.setWordWrap(True)
             power_user.setStyleSheet("color: #888888; font-size: 11px; margin-top: 6px;")
@@ -5121,7 +5121,7 @@ class WorkoutBuilder(QWidget):
 
         # Per-row saved state (done/rir/etc.); populated only when editing a
         # saved history entry so Edit actually restores the previous values
-        # instead of dropping them — was "delete and re-enter" before this.
+        # instead of dropping them; was "delete and re-enter" before this.
         saved_rows: List[Optional[dict]] = []
 
         # V4.0 safety rule: when editing an old workout history entry, load its
@@ -5199,7 +5199,7 @@ class WorkoutBuilder(QWidget):
     def refresh_today_if_stale(self) -> None:
         """Bump the date picker to today when the app has been left open across
         midnight. Only fires if the user hasn't manually picked a different
-        date (the picker still matches the value we last set) — so people
+        date (the picker still matches the value we last set), so people
         editing a past date aren't yanked forward."""
         today = QDate.currentDate()
         if self._last_app_set_date < today and self.date_edit.date() == self._last_app_set_date:
@@ -5502,7 +5502,7 @@ class WorkoutHistoryPage(QWidget):
         exercises = entry.get("exercises", [])
         total = len(exercises)
         done = sum(1 for ex in exercises if ex.get("done"))
-        self.summary_label.setText(f"{entry.get('date', '')} — {entry.get('template', '')} — completed {done}/{total} exercises")
+        self.summary_label.setText(f"{entry.get('date', '')}, {entry.get('template', '')}, completed {done}/{total} exercises")
         self.entry_notes.setPlainText(entry.get("warmup_notes", entry.get("workout_notes", "")))
 
         self.details_table.setRowCount(len(exercises))
@@ -5681,7 +5681,7 @@ class WorkoutHistoryPage(QWidget):
                 "<th style='width:15%'>Load</th><th style='width:6%'>RIR</th><th style='width:39%'>Notes</th></tr>"
             )
             for ex in exercises:
-                done_text = "✓" if ex.get("done") else "—"
+                done_text = "✓" if ex.get("done") else "-"
                 parts.append(
                     "<tr>"
                     f"<td class='center'>{done_text}</td>"
@@ -5851,7 +5851,7 @@ class OverviewPage(QWidget):
             template_label = ""
             if isinstance(summary["diet_log"], dict):
                 template_label = short_diet_template_label(summary["diet_log"].get("diet_template_name", ""))
-            lines.append(f"Diet — {template_label}\n" if template_label else "Diet\n")
+            lines.append(f"Diet: {template_label}\n" if template_label else "Diet\n")
             lines.append(f"  {summary['checked_count']}/{summary['total_items']} items\n")
             lines.append(f"  {summary['consumed']:.0f} kcal eaten\n")
             if summary["additional_calories"]:
@@ -5893,7 +5893,7 @@ class OverviewPage(QWidget):
 
         week_end = days[-1]
         self.week_label.setText(
-            f"Week: {self.current_week_start.isoformat()} → {week_end.isoformat()}"
+            f"Week: {self.current_week_start.isoformat()} to {week_end.isoformat()}"
         )
 
         today = date.today()
@@ -5981,7 +5981,7 @@ PHONE_PUBLIC_PORT = int(os.environ.get("PHONE_PUBLIC_PORT", str(PHONE_SERVER_POR
 
 
 def _phone_env_file() -> Dict[str, str]:
-    """Read DATA/HealthTracker/.env (KEY=VALUE lines) — holds secrets like the
+    """Read DATA/HealthTracker/.env (KEY=VALUE lines); holds secrets like the
     Cloudflare tunnel token. This file is gitignored; never hardcode secrets."""
     values: Dict[str, str] = {}
     try:
@@ -6095,7 +6095,7 @@ def _render_icon_png_bytes(size: int) -> bytes:
 def _render_maskable_png_bytes(size: int = 512) -> bytes:
     """Maskable launcher icon: the app icon scaled to FILL the whole tile so
     it occupies the full app-slot like normal apps (Android masks/rounds the
-    corners). Backdrop is the app's dark background — NOT a loud purple — so
+    corners). Backdrop is the app's dark background (NOT a loud purple), so
     any transparent edges blend in instead of glowing purple.
     """
     pix = QPixmap(size, size)
@@ -6127,7 +6127,7 @@ def _render_maskable_png_bytes(size: int = 512) -> bytes:
 
 
 # 4-line no-op passthrough service worker (HTTPS-only). Must NOT precache, so
-# app updates show on a plain refresh — see PHONE_WEB_APP_PLAYBOOK §12.5.
+# app updates show on a plain refresh; see PHONE_WEB_APP_PLAYBOOK §12.5.
 _PHONE_SW_JS = (
     "self.addEventListener('install',e=>self.skipWaiting());\n"
     "self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));\n"
@@ -6158,14 +6158,14 @@ def _phone_manifest() -> str:
 # --- Phone data/actions. Every function here runs on the Qt main thread (via
 # PhoneBridge) so it can safely drive the existing widgets. Driving the real
 # DietChecklistPage / WorkoutBuilder means the fragile per-day snapshot logic is
-# never reimplemented — the phone uses the exact same code path as the desktop.
+# never reimplemented; the phone uses the exact same code path as the desktop.
 
 def _phone_set_diet_date(dp: "DietChecklistPage", date_text: str) -> None:
     """Drive the desktop's date picker to `date_text` (fires load_day so the
     snapshot-safe save_current_day can write for the right date).
 
     Only call this from WRITE paths (toggle / fields / template / template
-    delete). Read paths must NOT call it — a phone refresh used to silently
+    delete). Read paths must NOT call it; a phone refresh used to silently
     switch the desktop's date to today and reload its widgets from the saved
     log, wiping the user's in-progress notes when today's saved value was
     empty.
@@ -6180,7 +6180,7 @@ def _phone_set_diet_date(dp: "DietChecklistPage", date_text: str) -> None:
 
 
 def _phone_diet_state(window: "MainWindow", date_text: str) -> Dict[str, Any]:
-    """Read-only diet state for the phone — computed from the STORE only.
+    """Read-only diet state for the phone, computed from the STORE only.
 
     Crucially does NOT touch the desktop DietChecklistPage widgets; the
     phone refreshing must never yank the desktop's date or wipe its notes.
@@ -6334,7 +6334,7 @@ def _phone_diet_template(window: "MainWindow", date_text: str, template_name: An
 def _phone_diet_history(window: "MainWindow") -> Dict[str, Any]:
     """Pure-store list of saved diet days for the phone history view.
 
-    Does NOT call DietHistoryPage.refresh() — that would clear the desktop's
+    Does NOT call DietHistoryPage.refresh(); that would clear the desktop's
     list selection and details pane just because the phone polled. We iterate
     the store directly; DietHistoryPage.summary_for_date is already
     pure-data, so reusing it is safe.
@@ -6408,7 +6408,7 @@ def _phone_workout_save(window: "MainWindow", date_text: str, template_name: Any
         if "done" in p:
             row.done_cb.setChecked(bool(p.get("done")))
     entry = builder.get_entry()
-    # Save directly (skip wlp.save_workout — it pops a modal that would freeze
+    # Save directly (skip wlp.save_workout, it pops a modal that would freeze
     # the main thread until the desktop user clicks OK).
     window.store.add_workout_entry(entry)
     window.workout_history_page.refresh_history()
@@ -6552,7 +6552,7 @@ textarea{min-height:70px;resize:vertical}
 </style>
 </head>
 <body>
-<div id="app"><div class="muted" style="padding:30px">Loading…</div></div>
+<div id="app"><div class="muted" style="padding:30px">Loading...</div></div>
 <div class="tabs">
   <button data-t="diet" class="on">Diet</button>
   <button data-t="food">Food</button>
@@ -6583,7 +6583,7 @@ function pNum(v){return parseFloat((''+v).replace(',','.'))||0;}
 function stepCalc(){const el=document.getElementById('s_res');if(!el)return;const k=Math.max(pSteps(stepS)*pNum(stepW)*stepCoeff,0);el.textContent='= '+Math.round(k)+' kcal';}
 async function renderDiet(){
  if(!dietDate)dietDate=todayStr();
- E.innerHTML='<div class="muted" style="padding:30px">Loading…</div>';
+ E.innerHTML='<div class="muted" style="padding:30px">Loading...</div>';
  let s;try{s=await api('/api/diet?date='+dietDate);}catch(e){E.innerHTML='<div class="card">'+esc(e.message)+'</div>';return;}
  dietDate=s.date;stepCoeff=s.step_coeff||stepCoeff;
  const cats=[...new Set(s.items.map(i=>i.category))];
@@ -6606,7 +6606,7 @@ async function renderDiet(){
   '<label>Additional deficit / burn</label><input id="f_ad" value="'+esc(f.additional_deficit)+'">'+
   '<label>Notes</label><textarea id="f_n">'+esc(f.note)+'</textarea>'+
   '<div class="muted">Saved automatically when you leave a field.</div></div>';
- h+='<div class="card"><label>Step burn calculator — manual, not saved</label>'+
+ h+='<div class="card"><label>Step burn calculator (manual, not saved)</label>'+
   '<div class="row"><input class="grow" id="s_st" inputmode="numeric" placeholder="steps" value="'+esc(stepS)+'">'+
   '<input class="grow" id="s_wt" inputmode="decimal" placeholder="kg" value="'+esc(stepW)+'"></div>'+
   '<div class="big" id="s_res">= 0 kcal</div>'+
@@ -6636,7 +6636,7 @@ async function renderFood(){
   '<label>Food</label><select id="fd" onchange="foodUnits()"></select>'+
   '<label>Amount</label><input id="fa" value="100" inputmode="decimal" oninput="foodCalc()">'+
   '<label>Unit</label><select id="fu" onchange="foodCalc()"></select>'+
-  '<div class="big" id="fr" style="margin-top:14px">—</div></div></div>';
+  '<div class="big" id="fr" style="margin-top:14px">-</div></div></div>';
  E.innerHTML=h;foodFilter();
 }
 function foodFilter(){const qel=document.getElementById('fq');const q=(qel?qel.value:'').toLowerCase().trim();
@@ -6645,10 +6645,10 @@ function foodFilter(){const qel=document.getElementById('fq');const q=(qel?qel.v
  fd.innerHTML=opts.length?opts.map(o=>'<option value="'+o.i+'">'+esc(o.f.name)+'</option>').join(''):'<option value="-1">No match</option>';
  foodUnits();}
 function foodUnits(){const v=document.getElementById('fd').value;const u=document.getElementById('fu');
- if(v==='-1'||v===''){u.innerHTML='';document.getElementById('fr').textContent='—';return;}
+ if(v==='-1'||v===''){u.innerHTML='';document.getElementById('fr').textContent='-';return;}
  const f=foods[v];u.innerHTML=Object.keys(f.units).map(n=>'<option'+(n===f.default_unit?' selected':'')+'>'+esc(n)+'</option>').join('');foodCalc();}
 function foodCalc(){const v=document.getElementById('fd').value;
- if(v==='-1'||v===''){document.getElementById('fr').textContent='—';return;}
+ if(v==='-1'||v===''){document.getElementById('fr').textContent='-';return;}
  const f=foods[v];const a=parseFloat(document.getElementById('fa').value.replace(',','.'))||0;
  const g=a*(f.units[document.getElementById('fu').value]||1);const k=g*f.kcal_per_g;
  document.getElementById('fr').textContent=Math.round(k*10)/10+' kcal'+(document.getElementById('fu').value!=='g'?'  ('+Math.round(g*10)/10+' g)':'');}
@@ -6663,10 +6663,10 @@ function wkSet(i){const g=id=>document.getElementById(id),o={};
 async function renderWorkout(t){
  if(t!=null&&t!==wkTpl)wkEdits={};            // explicit template switch resets
  const want=(t!=null?t:wkTpl);                // tab-return keeps current template
- E.innerHTML='<div class="muted" style="padding:30px">Loading…</div>';
+ E.innerHTML='<div class="muted" style="padding:30px">Loading...</div>';
  try{wk=await api('/api/workout'+(want?'?template='+encodeURIComponent(want):''));}catch(e){E.innerHTML='<div class="card">'+esc(e.message)+'</div>';return;}
  wkTpl=wk.template;if(!wkDate)wkDate=wk.date;
- // 'today' refresh — if a previous session's cached date crossed midnight, bump
+ // 'today' refresh: if a previous session's cached date crossed midnight, bump
  // to the phone-local today and drop yesterday's in-progress edits.
  const _today=todayStr();if(wkDate<_today){wkDate=_today;wkEdits={};}
  let h='<div class="bar"><div class="row"><select class="grow" onchange="renderWorkout(this.value)">'+
@@ -6712,7 +6712,7 @@ async function delDiet(d){if(!confirm('Delete diet log '+d+'?'))return;try{await
 async function delWk(c){if(!confirm('Delete this workout entry?'))return;try{await post('/api/workout/delete',{created_at:c});renderHistory();}catch(e){toast(e.message);}}
 
 async function renderRecipe(){
- E.innerHTML='<div class="muted" style="padding:30px">Loading…</div>';
+ E.innerHTML='<div class="muted" style="padding:30px">Loading...</div>';
  let d;try{d=await api('/api/recipes');}catch(e){E.innerHTML='<div class="card">'+esc(e.message)+'</div>';return;}
  window._recipes=d.recipes;
  E.innerHTML='<div class="bar"><input class="grow" id="rq" placeholder="search recipes or ingredients" oninput="recipeFilter()"></div><div class="wrap" id="rlist"></div>';
@@ -6795,7 +6795,7 @@ def make_phone_handler(window: "MainWindow"):
             query = parse_qs(parsed.query)
             if path in ("/", "/index.html"):
                 return self._send(200, _phone_html(), "text/html; charset=utf-8")
-            # PWA surface — must be reachable WITHOUT Cloudflare Access (the
+            # PWA surface, must be reachable WITHOUT Cloudflare Access (the
             # bypass apps cover exactly these paths); never put secrets here.
             if path in ("/manifest.json", "/manifest.webmanifest"):
                 return self._send(200, _phone_manifest(), "application/manifest+json; charset=utf-8", cache="revalidate")
@@ -6863,7 +6863,7 @@ def _kill_our_cloudflared(token: str) -> int:
     """Self-heal: kill any cloudflared.exe whose command line carries OUR
     token. Used at startup to clean up orphans from a previous run where the
     Job-object kill-on-close failed (e.g. on Windows). The token comparison
-    happens in Python — the token never enters the shell command we invoke —
+    happens in Python (the token never enters the shell command we invoke),
     so OTHER apps' cloudflared tunnels (different tokens) are not touched.
     """
     if not sys.platform.startswith("win") or not token:
@@ -6941,10 +6941,10 @@ def _kill_on_close_job(proc: "subprocess.Popen") -> Any:
             ]
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        # CRITICAL — declare argtypes/restypes. Without these, HANDLEs default
+        # CRITICAL: declare argtypes/restypes. Without these, HANDLEs default
         # to 32-bit ints and get truncated on 64-bit Python, so the calls
         # below would silently fail (return 0 with no exception) and the
-        # child was never actually in the job → not killed when we exit.
+        # child was never actually in the job, so not killed when we exit.
         # That's the bug that left orphan cloudflared processes serving 502
         # to the phone. Don't remove these declarations.
         kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
@@ -6984,7 +6984,7 @@ def _stop_cloudflared(window: "MainWindow") -> None:
 
 
 def _start_cloudflared(window: "MainWindow") -> None:
-    """Auto-run the named Cloudflare tunnel. Guarded — a tunnel failure must
+    """Auto-run the named Cloudflare tunnel. Guarded; a tunnel failure must
     never block the local server (the plain-IP path still works)."""
     if not PHONE_TUNNEL_ENABLED:
         print("[tunnel] PHONE_TUNNEL_ENABLED=0; tunnel skipped.", flush=True)
@@ -7088,7 +7088,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.workout_history_page, "Workout History")
 
         # Refresh "today" on the Workout Log tab when the app has been left
-        # open across midnight — picker showed yesterday otherwise.
+        # open across midnight; picker showed yesterday otherwise.
         self.tabs.currentChanged.connect(self._on_main_tab_changed)
 
         self.setup_menu()
