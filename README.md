@@ -63,8 +63,8 @@ automatically via the same resolver used in dev mode.
 ## Architecture
 
 One file, three layers: module-level helpers (parsing/formatting, snapshot
-logic, PDF/HTML export) → **`UnifiedStore`**, one in-memory `self.data` dict
-persisted to split JSON files under `DATA/HealthTracker/` → **Qt UI pages**,
+logic, PDF/HTML export), then **`UnifiedStore`**, one in-memory `self.data` dict
+persisted to split JSON files under `DATA/HealthTracker/`, then **Qt UI pages**,
 one `QWidget` per tab, with `MainWindow` wiring them plus the embedded HTTP
 server. See [CHANGELOG.md](CHANGELOG.md) for the deeper engineering narrative.
 
