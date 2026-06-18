@@ -1,11 +1,11 @@
 # Home Fitness Tracker
 
-A single-file PyQt6 desktop app for tracking diet, workouts, recipes, and a
-food calorie calculator, with an installable phone app (PWA) so you can tick
-off your diet checklist from anywhere. All data lives on your own machine as
-plain JSON; no cloud account.
+A PyQt6 desktop app for tracking diet, workouts, recipes, and a food calorie
+calculator, with an installable phone app (PWA) so you can tick off your diet
+checklist from anywhere. All data lives on your own machine as plain JSON; no
+cloud account.
 
-<img width="1920" height="1080" alt="fitness-tracker-demo" src="https://github.com/user-attachments/assets/afee6a50-7be8-458a-968d-2e1dd478f25b" />
+<video src="https://github.com/user-attachments/assets/afee6a50-7be8-458a-968d-2e1dd478f25b" controls width="720"></video>
 
 ## Features
 
@@ -17,6 +17,8 @@ plain JSON; no cloud account.
 - **Phone access** via an embedded server + installable PWA, works on your LAN
   out of the box, with an optional HTTPS-from-anywhere path.
 - **Daily Overview** weekly grid, plus **PDF / Markdown exports**.
+- **Lives in the system tray** (starts hidden, closing the window hides it back),
+  with an optional run-at-startup toggle on Windows and Linux.
 
 See [CHANGELOG.md](CHANGELOG.md) for the engineering log.
 
@@ -62,11 +64,14 @@ automatically via the same resolver used in dev mode.
 
 ## Architecture
 
-One file, three layers: module-level helpers (parsing/formatting, snapshot
-logic, PDF/HTML export), then **`UnifiedStore`**, one in-memory `self.data` dict
-persisted to split JSON files under `DATA/HealthTracker/`, then **Qt UI pages**,
-one `QWidget` per tab, with `MainWindow` wiring them plus the embedded HTTP
-server. See [CHANGELOG.md](CHANGELOG.md) for the deeper engineering narrative.
+`health_tracker.py` is three layers: module-level helpers (parsing/formatting,
+snapshot logic, PDF/HTML export), then **`UnifiedStore`**, one in-memory
+`self.data` dict persisted to split JSON files under `DATA/HealthTracker/`, then
+**Qt UI pages**, one `QWidget` per tab, with `MainWindow` wiring them plus the
+embedded HTTP server. The Config Editor lives in a small companion module,
+`config_editor.py`, whose editor pages the main app embeds as a tab (and which
+also runs standalone). See [CHANGELOG.md](CHANGELOG.md) for the deeper
+engineering narrative.
 
 ## License
 

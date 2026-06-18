@@ -2,6 +2,43 @@
 
 All notable changes to Home Fitness Tracker.
 
+## [0.3.0]: Unified Config Editor, tray residence, and fixes
+
+The diet and workout template editors are reworked into a single **Config
+Editor** tab with three sub-editors (Foods, Diet Configs, Workout Templates),
+replacing the per-tab "Edit template..." dialogs from 0.2.0. The editor pages
+live in a small companion module, `config_editor.py`, that the main app embeds
+as a tab and that also runs standalone.
+
+- **Foods editor** (new): add, edit, duplicate, and delete entries in
+  `foods.json` from the UI, including each food's unit-to-grams table and the
+  file-level global units. Foods were previously editable only by hand.
+- **Diet Configs editor**: pick any template file and edit its plan settings
+  and item table (name / amount / unit / calories / category) plus the optional
+  `display_label`, per-item notes, and `hide_amount_in_checklist`. Includes a
+  split-item helper, a live plan-total vs target readout, "New template", and
+  "Set as default". Templates are edited as raw JSON in place, so unknown fields
+  round-trip untouched.
+- **Workout Templates editor**: manage templates (add / rename / duplicate /
+  delete) and edit each one's exercises, rest seconds, warm-up notes, and HIIT
+  fields. Edited as raw JSON so schema-flexible and extra fields survive.
+- Every save writes a timestamped backup first, and each editor has a "Reload
+  from disk" button.
+
+Also in this release:
+
+- **System-tray residence**: the app starts hidden in the tray instead of
+  keeping a permanent taskbar entry; closing the window hides it back, and Quit
+  (tray menu or File -> Quit) is the only thing that exits. Includes an optional
+  **run-at-startup** toggle (Windows registry / Linux autostart `.desktop`, as
+  fully separate per-OS branches).
+- **Linux startup fix**: force Qt off the glib event dispatcher so the app no
+  longer busy-loops to 100% CPU when the audio socket is closed under it.
+- **Calculator inputs** now normalize common Unicode lookalikes (fullwidth
+  digits/operators, en/em dashes, Unicode minus, NBSP, zero-width characters)
+  to ASCII before evaluating, and the error message names the offending
+  codepoint when something still can't be parsed.
+
 ## [0.2.0]: In-app template editors
 
 The diet and workout templates are now fully editable from the UI, no

@@ -15,6 +15,16 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# On Linux, Qt's default glib event dispatcher busy-loops forever (one CPU core
+# pegged, app "not responding") when QtMultimedia's PipeWire/Pulse audio socket
+# is closed out from under a QSocketNotifier: it floods stderr with
+# "QSocketNotifier: Invalid socket N and type 'Read', disabling..." but never
+# actually drops the dead fd. Qt's native UNIX dispatcher disables the stale
+# notifier cleanly, so force it off glib. Must be set before QApplication is
+# created. Windows uses a different dispatcher and never hits this.
+if not sys.platform.startswith("win"):
+    os.environ.setdefault("QT_NO_GLIB", "1")
+
 from PyQt6.QtCore import (
     QDate, Qt, QMarginsF, QTimer, QEvent, QUrl,
     QObject, pyqtSignal, QByteArray, QBuffer, QIODevice, QSize,
@@ -41,6 +51,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMenu,
+    QSystemTrayIcon,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
@@ -62,7 +73,7 @@ except Exception:  # QtMultimedia may be unavailable in some PyQt installs; fall
     QSoundEffect = None  # type: ignore
 
 APP_TITLE = "Home Fitness Tracker"
-APP_VERSION = "0.2"
+APP_VERSION = "0.3"
 APP_ICON_FILE = "icon.ico"
 BEEP_SOUND_FILE = "beep.wav"
 DATA_DIR_NAME = "DATA"
@@ -346,6 +357,30 @@ def first_nonempty_string(*values: Any) -> str:
     return ""
 
 
+# Fold common Unicode lookalikes to ASCII before the strict numeric gate below,
+# so values pasted from phones/locales (fullwidth digits, en/em dashes, Unicode
+# minus, multiplication signs, NBSP/zero-width junk, decimal comma) still parse.
+# The keys are intentionally non-ASCII; they are data, not prose.
+_CALC_NORMALIZE_MAP = str.maketrans({
+    # decimal comma
+    ",": ".",
+    # operator lookalikes
+    "．": ".", "＋": "+",
+    "－": "-", "−": "-", "–": "-", "—": "-", "‒": "-",
+    "＊": "*", "×": "*", "✕": "*", "✖": "*", "x": "*", "X": "*",
+    "∗": "*", "⁎": "*", "﹡": "*", "٭": "*", "⋆": "*", "★": "*", "☆": "*",
+    "／": "/", "÷": "/",
+    "（": "(", "）": ")",
+    # fullwidth digits
+    "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+    "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+    # whitespace variants -> normal space
+    " ": " ", " ": " ", " ": " ", " ": " ", " ": " ",
+    # zero-width junk: drop
+    "​": "", "‌": "", "‍": "", "﻿": "",
+})
+
+
 def calculate_number_expression(value: Any) -> Optional[float]:
     """
     Safely evaluate tiny calculator-style numeric expressions for kcal fields.
@@ -358,18 +393,16 @@ def calculate_number_expression(value: Any) -> Optional[float]:
       120/2
       (120+33)/2
 
-    Nothing except numbers, decimal separators, spaces, parentheses, and
-    arithmetic operators is accepted. This avoids using Python eval().
+    Common Unicode lookalikes (fullwidth digits/operators, en/em dashes,
+    Unicode minus, NBSP, zero-width chars, decimal comma) are normalized to
+    ASCII first. Anything left that isn't a digit, decimal, space, paren, or
+    +-*/ is rejected. This avoids using Python eval().
     """
     text = stringify_value(value).strip()
     if not text:
         return None
 
-    # Turkish/European decimal comma support for values like 12,5.
-    text = text.replace(",", ".")
-
-    # Convenience aliases in case the user types x or × for multiplication.
-    text = text.replace("×", "*").replace("x", "*").replace("X", "*")
+    text = text.translate(_CALC_NORMALIZE_MAP)
 
     if len(text) > 80:
         return None
@@ -603,7 +636,7 @@ def short_diet_template_label(name: Any) -> str:
     """Compact label for the weekly overview: strips a leading 'YYYY MM DD'
     from a saved diet_template_name, leaving just the descriptive part.
 
-    E.g. '2026 05 23 IronMeatDay' -> 'IronMeatDay'. The date column header
+    E.g. '2026 05 23 LowCarbDay' -> 'LowCarbDay'. The date column header
     already shows the day, so repeating it inside the cell wastes space.
     Falls back to the full name when there's nothing descriptive after the date.
     """
@@ -1828,24 +1861,16 @@ class UnifiedStore:
         return s or fallback
 
     def migrate_diet_log_ids(self, data: Dict[str, Any]) -> None:
+        """Hook for migrating saved diet-log checkbox ids when item ids change
+        between versions. No migrations are needed currently; it just makes sure
+        every saved day loads with a well-formed `checked` map."""
         logs = data.get("diet", {}).get("logs", {})
         if not isinstance(logs, dict):
             return
 
         for _, entry in logs.items():
-            if not isinstance(entry, dict):
-                continue
-            checked = entry.setdefault("checked", {})
-            if not isinstance(checked, dict):
+            if isinstance(entry, dict) and not isinstance(entry.get("checked"), dict):
                 entry["checked"] = {}
-                continue
-
-            # Old V3/V4 ambiguous water key.
-            if "water_hamidiye" in checked:
-                old_value = bool(checked.get("water_hamidiye", False))
-                checked.setdefault("water_hamidiye_1", old_value)
-                checked.setdefault("water_hamidiye_2", old_value)
-                checked.pop("water_hamidiye", None)
 
     # Diet helpers.
     def get_diet_config(self) -> Dict[str, Any]:
@@ -2336,15 +2361,6 @@ class DietChecklistPage(QWidget):
         self.diet_template_combo.setMinimumWidth(180)
         self.make_default_diet_template_btn = QPushButton("Make default")
         self.make_default_diet_template_btn.setToolTip("Use this diet template automatically for new blank days.")
-        self.edit_diet_template_btn = QPushButton("Edit template...")
-        self.edit_diet_template_btn.setToolTip("Edit this diet template's items, target, and expenditure. Saved days keep their frozen snapshots.")
-        self.manage_diet_template_btn = QPushButton("Manage ▾")
-        self.manage_diet_template_btn.setToolTip("Create, rename, or delete diet templates.")
-        manage_menu = QMenu(self.manage_diet_template_btn)
-        self.new_diet_template_action = manage_menu.addAction("New template...")
-        self.rename_diet_template_action = manage_menu.addAction("Rename template...")
-        self.delete_diet_template_action = manage_menu.addAction("Delete template...")
-        self.manage_diet_template_btn.setMenu(manage_menu)
 
         top.addWidget(self.prev_btn)
         top.addWidget(self.today_btn)
@@ -2353,8 +2369,6 @@ class DietChecklistPage(QWidget):
         top.addWidget(QLabel("Diet template:"))
         top.addWidget(self.diet_template_combo)
         top.addWidget(self.make_default_diet_template_btn)
-        top.addWidget(self.edit_diet_template_btn)
-        top.addWidget(self.manage_diet_template_btn)
         top.addStretch(1)
         top.addWidget(self.select_all_btn)
         top.addWidget(self.clear_selected_btn)
@@ -2462,10 +2476,6 @@ class DietChecklistPage(QWidget):
         self.reload_btn.clicked.connect(self.reload_diet_config_clicked)
         self.diet_template_combo.currentIndexChanged.connect(self.on_diet_template_changed)
         self.make_default_diet_template_btn.clicked.connect(self.make_selected_diet_template_default)
-        self.edit_diet_template_btn.clicked.connect(self.edit_selected_diet_template)
-        self.new_diet_template_action.triggered.connect(self.new_diet_template)
-        self.rename_diet_template_action.triggered.connect(self.rename_selected_diet_template)
-        self.delete_diet_template_action.triggered.connect(self.delete_selected_diet_template)
 
         # Free-text fields now autosave too, so the old Save button is unnecessary.
         self.weight_edit.textChanged.connect(self.on_free_text_changed)
@@ -2528,117 +2538,6 @@ class DietChecklistPage(QWidget):
             APP_TITLE,
             f"Default diet template set to:\n\n{label}\n\nNew blank days will use this automatically. Existing saved days keep their frozen snapshots."
         )
-
-    def edit_selected_diet_template(self) -> None:
-        template_name = self.selected_diet_template_name()
-        if self.store.diet_template_source_path(template_name) is None:
-            QMessageBox.information(
-                self,
-                APP_TITLE,
-                "This diet template is defined inline inside diet_config.json and can't be edited in-app yet.\n\n"
-                "Edit it via the JSON file, or create a standalone template instead.",
-            )
-            return
-
-        config = self.store.diet_config_for_template(template_name)
-        dialog = DietTemplateEditDialog(self, template_name, config)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        try:
-            self.store.save_diet_template(template_name, dialog.get_config())
-        except Exception as exc:
-            QMessageBox.warning(self, APP_TITLE, f"Could not save the diet template.\n\n{exc}")
-            return
-
-        # Reload split files so the edited template/config is picked up, then
-        # rebuild the *visible* checklist from current config. Saved days keep
-        # their frozen per-day snapshots; only blank/unsaved days change.
-        self.store.load_split_files()
-        self.refresh_diet_template_combo(template_name)
-        self.rebuild_items(force_current_config=True)
-        QMessageBox.information(
-            self,
-            APP_TITLE,
-            "Diet template saved. Previously logged days keep their frozen items; "
-            "new blank days use the updated template.",
-        )
-
-    def new_diet_template(self) -> None:
-        name, ok = QInputDialog.getText(self, APP_TITLE, "Name for the new diet template:")
-        if not ok or not stringify_value(name):
-            return
-        try:
-            display, path = self.store.create_diet_template(name)
-        except Exception as exc:
-            QMessageBox.warning(self, APP_TITLE, str(exc))
-            return
-
-        self.store.load_split_files()
-        # Open the editor right away so the user fills the empty template.
-        config = self.store.diet_config_for_template(display)
-        dialog = DietTemplateEditDialog(self, display, config)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            try:
-                self.store.save_diet_template(display, dialog.get_config())
-            except Exception as exc:
-                QMessageBox.warning(self, APP_TITLE, f"Could not save the diet template.\n\n{exc}")
-        else:
-            # Cancelled before adding anything; drop the empty starter file.
-            try:
-                if path.exists():
-                    path.unlink()
-            except Exception:
-                pass
-
-        self.store.load_split_files()
-        self.refresh_diet_template_combo(display)
-        self.rebuild_items(force_current_config=True)
-
-    def rename_selected_diet_template(self) -> None:
-        old = self.selected_diet_template_name()
-        if self.store.diet_template_source_path(old) is None or not old:
-            QMessageBox.information(
-                self, APP_TITLE,
-                "This entry can't be renamed in-app. Create a standalone template instead.",
-            )
-            return
-        new, ok = QInputDialog.getText(self, APP_TITLE, "New name for this diet template:", text=old)
-        if not ok or not stringify_value(new):
-            return
-        try:
-            display = self.store.rename_diet_template(old, new)
-        except Exception as exc:
-            QMessageBox.warning(self, APP_TITLE, str(exc))
-            return
-        self.store.load_split_files()
-        self.refresh_diet_template_combo(display)
-        self.rebuild_items(force_current_config=True)
-
-    def delete_selected_diet_template(self) -> None:
-        target = self.selected_diet_template_name()
-        if self.store.diet_template_source_path(target) is None or not target:
-            QMessageBox.information(
-                self, APP_TITLE,
-                "This entry can't be deleted in-app.",
-            )
-            return
-        confirm = QMessageBox.question(
-            self, APP_TITLE,
-            f"Delete diet template '{target}'?\n\nSaved days that used it keep their frozen snapshots.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            self.store.delete_diet_template(target)
-        except Exception as exc:
-            QMessageBox.warning(self, APP_TITLE, str(exc))
-            return
-        self.store.load_split_files()
-        self.refresh_diet_template_combo()
-        self.rebuild_items(force_current_config=True)
 
     def set_diet_template_combo(self, template_name: str) -> None:
         index = self.diet_template_combo.findData(stringify_value(template_name))
@@ -2767,10 +2666,9 @@ class DietChecklistPage(QWidget):
             empty.setStyleSheet("font-size: 14px; font-weight: bold; margin-top: 16px;")
             empty.setWordWrap(True)
             self.items_layout.addWidget(empty)
-            create_btn = QPushButton("Create your first item →")
-            create_btn.setToolTip("Open the template editor to add diet items.")
-            create_btn.clicked.connect(self.edit_selected_diet_template)
-            self.items_layout.addWidget(create_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+            empty_hint = QLabel("No items in this template yet. Add them in the Config Editor tab (Diet Configs).")
+            empty_hint.setWordWrap(True)
+            self.items_layout.addWidget(empty_hint, alignment=Qt.AlignmentFlag.AlignLeft)
             self.items_layout.addStretch(1)
             if load_after:
                 self.load_day(date_text, rebuild_if_needed=False)
@@ -2859,6 +2757,22 @@ class DietChecklistPage(QWidget):
 
         result = calculate_number_expression(raw_text)
         if result is None:
+            # Pinpoint the offending character(s) so the user isn't guessing.
+            # Normalize first (same map calculate_number_expression uses), then
+            # report anything that still isn't a digit / +-*/ / paren / dot /
+            # space: that's what the regex is rejecting.
+            normalized = raw_text.translate(_CALC_NORMALIZE_MAP)
+            offending = sorted({c for c in normalized
+                                if not re.match(r"[0-9+\-*/().\s]", c)})
+            detail = ""
+            if offending:
+                pretty = ", ".join(f"'{c}' (U+{ord(c):04X})" for c in offending)
+                detail = (
+                    f"\n\nUnsupported character(s) in your input: {pretty}.\n"
+                    "These look like ASCII but aren't, usually from a paste, "
+                    "fullwidth keyboard, or Word autocorrect. Retype them by "
+                    "hand and try again."
+                )
             QMessageBox.warning(
                 self,
                 APP_TITLE,
@@ -2868,6 +2782,7 @@ class DietChecklistPage(QWidget):
                 "120-20\n"
                 "120*2\n"
                 "120/2"
+                f"{detail}"
             )
             return
 
@@ -3534,390 +3449,6 @@ class FoodCalculatorPage(QWidget):
             f"{format_number(grams, 1)} g × {format_number(kcal_per_g, 3)} kcal/g = {format_number(kcal, 1)} kcal"
             if unit_text != "g"
             else f"{format_number(kcal, 1)} kcal"
-        )
-
-
-# -----------------------------
-# Diet template editor
-# -----------------------------
-class DietTemplateEditDialog(QDialog):
-    """In-app editor for a diet template (the JSON the dropdown points at).
-
-    Mirrors RecipeEditDialog's shape. Saving writes back through
-    UnifiedStore.save_diet_template, which re-validates via
-    normalize_diet_config and preserves unknown fields.
-    """
-
-    ITEM_COLUMNS = ["ID", "Name", "Amount", "Unit", "Calories", "Category", "Notes"]
-    KNOWN_ITEM_KEYS = {"id", "name", "amount", "unit", "calories", "category", "notes"}
-
-    def __init__(self, parent: QWidget, template_name: str, config: Optional[dict] = None):
-        super().__init__(parent)
-        self.template_name = stringify_value(template_name)
-        self.setWindowTitle(f"Diet template editor: {self.template_name or 'Current diet config'}")
-        self.resize(900, 650)
-        config = config or {}
-
-        layout = QVBoxLayout(self)
-
-        info_box = QGroupBox("Template summary")
-        info_grid = QGridLayout(info_box)
-
-        self.name_label = QLabel(self.template_name or "Current diet_config.json")
-        self.name_label.setStyleSheet("font-weight: bold;")
-        self.target_edit = QLineEdit(format_number(config.get("target_calories", 0), 2))
-        self.target_edit.setPlaceholderText("Target calories")
-        self.expenditure_edit = QLineEdit(format_number(config.get("estimated_expenditure", 0), 2))
-        self.expenditure_edit.setPlaceholderText("Estimated expenditure")
-
-        info_grid.addWidget(QLabel("Template"), 0, 0)
-        info_grid.addWidget(self.name_label, 0, 1, 1, 3)
-        info_grid.addWidget(QLabel("Target calories"), 1, 0)
-        info_grid.addWidget(self.target_edit, 1, 1)
-        info_grid.addWidget(QLabel("Estimated expenditure"), 1, 2)
-        info_grid.addWidget(self.expenditure_edit, 1, 3)
-        layout.addWidget(info_box)
-
-        self.items_table = QTableWidget(0, len(self.ITEM_COLUMNS))
-        self.items_table.setHorizontalHeaderLabels(self.ITEM_COLUMNS)
-        header = self.items_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
-        self.items_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.items_table.setEditTriggers(
-            QTableWidget.EditTrigger.DoubleClicked
-            | QTableWidget.EditTrigger.SelectedClicked
-            | QTableWidget.EditTrigger.EditKeyPressed
-        )
-        layout.addWidget(QLabel("Items (ID is auto-generated from the name when left blank)"))
-        layout.addWidget(self.items_table, 1)
-
-        item_buttons = QHBoxLayout()
-        self.add_item_btn = QPushButton("Add item")
-        self.remove_item_btn = QPushButton("Remove selected")
-        self.move_up_btn = QPushButton("Move up")
-        self.move_down_btn = QPushButton("Move down")
-        item_buttons.addWidget(self.add_item_btn)
-        item_buttons.addWidget(self.remove_item_btn)
-        item_buttons.addStretch(1)
-        item_buttons.addWidget(self.move_up_btn)
-        item_buttons.addWidget(self.move_down_btn)
-        layout.addLayout(item_buttons)
-
-        self.notes_edit = QPlainTextEdit()
-        self.notes_edit.setPlaceholderText("Optional template notes")
-        self.notes_edit.setFixedHeight(80)
-        self.notes_edit.setPlainText(stringify_value(config.get("notes", "")))
-        layout.addWidget(QLabel("Notes"))
-        layout.addWidget(self.notes_edit)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self._render_items([item for item in config.get("items", []) if isinstance(item, dict)])
-        if self.items_table.rowCount() == 0:
-            self.add_item_row({})
-
-        self.add_item_btn.clicked.connect(lambda: self.add_item_row({}))
-        self.remove_item_btn.clicked.connect(self.remove_selected_item)
-        self.move_up_btn.clicked.connect(lambda: self.move_selected(-1))
-        self.move_down_btn.clicked.connect(lambda: self.move_selected(1))
-
-    def add_item_row(self, item: dict) -> None:
-        row = self.items_table.rowCount()
-        self.items_table.insertRow(row)
-        id_item = QTableWidgetItem(stringify_value(item.get("id", "")))
-        id_item.setFlags(id_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        extra = {k: v for k, v in item.items() if k not in self.KNOWN_ITEM_KEYS}
-        id_item.setData(Qt.ItemDataRole.UserRole, extra)
-        self.items_table.setItem(row, 0, id_item)
-        values = [
-            stringify_value(item.get("name", "")),
-            format_number(item.get("amount", 0), 2),
-            stringify_value(item.get("unit", "")),
-            format_number(item.get("calories", 0), 2),
-            stringify_value(item.get("category", "")) or "Other",
-            stringify_value(item.get("notes", "")),
-        ]
-        for offset, value in enumerate(values, start=1):
-            self.items_table.setItem(row, offset, QTableWidgetItem(str(value)))
-
-    def _render_items(self, items: List[dict]) -> None:
-        self.items_table.setRowCount(0)
-        for item in items:
-            self.add_item_row(item)
-
-    def cell_text(self, row: int, col: int) -> str:
-        item = self.items_table.item(row, col)
-        return item.text().strip() if item else ""
-
-    def _collect_rows(self) -> List[dict]:
-        rows: List[dict] = []
-        for row in range(self.items_table.rowCount()):
-            id_item = self.items_table.item(row, 0)
-            extra = id_item.data(Qt.ItemDataRole.UserRole) if id_item else {}
-            if not isinstance(extra, dict):
-                extra = {}
-            item = dict(extra)
-            item["id"] = self.cell_text(row, 0)
-            item["name"] = self.cell_text(row, 1)
-            item["amount"] = parse_float(self.cell_text(row, 2), 0.0)
-            item["unit"] = self.cell_text(row, 3)
-            item["calories"] = parse_float(self.cell_text(row, 4), 0.0)
-            item["category"] = self.cell_text(row, 5) or "Other"
-            notes = self.cell_text(row, 6)
-            if notes or "notes" in extra:
-                item["notes"] = notes
-            rows.append(item)
-        return rows
-
-    def remove_selected_item(self) -> None:
-        rows = sorted({index.row() for index in self.items_table.selectedIndexes()}, reverse=True)
-        for row in rows:
-            self.items_table.removeRow(row)
-
-    def move_selected(self, delta: int) -> None:
-        selected = sorted({index.row() for index in self.items_table.selectedIndexes()})
-        if len(selected) != 1:
-            return
-        row = selected[0]
-        target = row + delta
-        if target < 0 or target >= self.items_table.rowCount():
-            return
-        data = self._collect_rows()
-        data[row], data[target] = data[target], data[row]
-        self._render_items(data)
-        self.items_table.selectRow(target)
-
-    def items(self) -> List[dict]:
-        return [item for item in self._collect_rows() if stringify_value(item.get("name"))]
-
-    def accept(self) -> None:
-        if not self.items():
-            QMessageBox.information(self, APP_TITLE, "Add at least one item with a name.")
-            return
-        super().accept()
-
-    def get_config(self) -> dict:
-        return {
-            "target_calories": parse_float(self.target_edit.text(), 0.0),
-            "estimated_expenditure": parse_float(self.expenditure_edit.text(), 0.0),
-            "notes": self.notes_edit.toPlainText().strip(),
-            "items": self.items(),
-        }
-
-
-# -----------------------------
-# Workout template editor
-# -----------------------------
-class WorkoutTemplateEditDialog(QDialog):
-    """In-app editor for a workout template.
-
-    Mirrors the diet editor. Exercises are edited in a table (Name,
-    Sets × Reps, Target Load, Notes) with an "Advanced (JSON)" column that
-    exposes HIIT/extra fields (type, steps, rounds, step_seconds, ...) as raw
-    JSON so they stay visible and editable. Any unknown fields the user had
-    in the JSON survive a round trip via ExerciseDef.extra.
-    """
-
-    EX_COLUMNS = ["Name", "Sets × Reps", "Target Load", "Notes", "Advanced (JSON)"]
-    DISPLAY_KEYS = {"name", "sets_reps", "target_load", "notes"}
-
-    def __init__(self, parent: QWidget, template: WorkoutTemplate):
-        super().__init__(parent)
-        self.template = template
-        self.setWindowTitle(f"Workout template editor: {template.name}")
-        self.resize(960, 660)
-
-        layout = QVBoxLayout(self)
-
-        info_box = QGroupBox("Template summary")
-        info_grid = QGridLayout(info_box)
-
-        self.name_label = QLabel(template.name)
-        self.name_label.setStyleSheet("font-weight: bold;")
-        self.rest_edit = QLineEdit(str(template.default_rest_seconds()))
-        self.rest_edit.setPlaceholderText("Default rest seconds, e.g. 75")
-        self.rest_edit.setMaximumWidth(100)
-
-        info_grid.addWidget(QLabel("Template"), 0, 0)
-        info_grid.addWidget(self.name_label, 0, 1)
-        info_grid.addWidget(QLabel("Default rest (seconds)"), 0, 2)
-        info_grid.addWidget(self.rest_edit, 0, 3)
-        info_grid.setColumnStretch(1, 1)
-        layout.addWidget(info_box)
-
-        self.exercises_table = QTableWidget(0, len(self.EX_COLUMNS))
-        self.exercises_table.setHorizontalHeaderLabels(self.EX_COLUMNS)
-        header = self.exercises_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self.exercises_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.exercises_table.setEditTriggers(
-            QTableWidget.EditTrigger.DoubleClicked
-            | QTableWidget.EditTrigger.SelectedClicked
-            | QTableWidget.EditTrigger.EditKeyPressed
-        )
-        layout.addWidget(QLabel("Exercises"))
-        layout.addWidget(self.exercises_table, 1)
-
-        ex_buttons = QHBoxLayout()
-        self.add_ex_btn = QPushButton("Add exercise")
-        self.remove_ex_btn = QPushButton("Remove selected")
-        self.move_up_btn = QPushButton("Move up")
-        self.move_down_btn = QPushButton("Move down")
-        ex_buttons.addWidget(self.add_ex_btn)
-        ex_buttons.addWidget(self.remove_ex_btn)
-        ex_buttons.addStretch(1)
-        ex_buttons.addWidget(self.move_up_btn)
-        ex_buttons.addWidget(self.move_down_btn)
-        layout.addLayout(ex_buttons)
-
-        advanced_hint = QLabel(
-            "Advanced (JSON) holds extra/HIIT fields (type, steps, rounds, step_seconds, ...). "
-            "Leave it as {} for a plain strength exercise."
-        )
-        advanced_hint.setStyleSheet("color: #888888; font-size: 11px;")
-        advanced_hint.setWordWrap(True)
-        layout.addWidget(advanced_hint)
-
-        self.warmup_edit = QPlainTextEdit()
-        self.warmup_edit.setPlaceholderText("Warm-up notes for this template")
-        self.warmup_edit.setFixedHeight(70)
-        self.warmup_edit.setPlainText(stringify_value(template.warmup_notes))
-        layout.addWidget(QLabel("Warm-up notes"))
-        layout.addWidget(self.warmup_edit)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self._render_exercises(template.exercises)
-        if self.exercises_table.rowCount() == 0:
-            self.add_exercise_row(ExerciseDef("", "", "", "", extra={}))
-
-        self.add_ex_btn.clicked.connect(lambda: self.add_exercise_row(ExerciseDef("", "", "", "", extra={})))
-        self.remove_ex_btn.clicked.connect(self.remove_selected_exercise)
-        self.move_up_btn.clicked.connect(lambda: self.move_selected(-1))
-        self.move_down_btn.clicked.connect(lambda: self.move_selected(1))
-
-    def _advanced_text(self, exercise: ExerciseDef) -> str:
-        extra = {k: v for k, v in exercise.extra.items() if k not in self.DISPLAY_KEYS}
-        return json.dumps(extra, ensure_ascii=False) if extra else "{}"
-
-    def add_exercise_row(self, exercise: ExerciseDef) -> None:
-        row = self.exercises_table.rowCount()
-        self.exercises_table.insertRow(row)
-        values = [
-            exercise.name,
-            exercise.sets_reps,
-            exercise.target_load,
-            exercise.notes,
-            self._advanced_text(exercise),
-        ]
-        for col, value in enumerate(values):
-            self.exercises_table.setItem(row, col, QTableWidgetItem(stringify_value(value)))
-
-    def _render_exercises(self, exercises: List[ExerciseDef]) -> None:
-        self.exercises_table.setRowCount(0)
-        for exercise in exercises:
-            self.add_exercise_row(exercise)
-
-    def cell_text(self, row: int, col: int) -> str:
-        item = self.exercises_table.item(row, col)
-        return item.text().strip() if item else ""
-
-    def _parse_advanced(self, text: str) -> Dict[str, Any]:
-        text = (text or "").strip()
-        if not text or text == "{}":
-            return {}
-        data = json.loads(text)
-        if not isinstance(data, dict):
-            raise ValueError("Advanced JSON must be an object, e.g. {\"type\": \"hiit\"}")
-        return data
-
-    def _row_to_exercise(self, row: int) -> ExerciseDef:
-        extra = self._parse_advanced(self.cell_text(row, 4))
-        return ExerciseDef(
-            name=self.cell_text(row, 0),
-            sets_reps=self.cell_text(row, 1),
-            target_load=self.cell_text(row, 2),
-            notes=self.cell_text(row, 3),
-            extra=extra,
-        )
-
-    def remove_selected_exercise(self) -> None:
-        rows = sorted({index.row() for index in self.exercises_table.selectedIndexes()}, reverse=True)
-        for row in rows:
-            self.exercises_table.removeRow(row)
-
-    def move_selected(self, delta: int) -> None:
-        selected = sorted({index.row() for index in self.exercises_table.selectedIndexes()})
-        if len(selected) != 1:
-            return
-        row = selected[0]
-        target = row + delta
-        if target < 0 or target >= self.exercises_table.rowCount():
-            return
-        # Reorder using raw cell text so a malformed Advanced cell cannot block a move.
-        snapshot = [
-            [self.cell_text(r, c) for c in range(len(self.EX_COLUMNS))]
-            for r in range(self.exercises_table.rowCount())
-        ]
-        snapshot[row], snapshot[target] = snapshot[target], snapshot[row]
-        self.exercises_table.setRowCount(0)
-        for cells in snapshot:
-            r = self.exercises_table.rowCount()
-            self.exercises_table.insertRow(r)
-            for c, value in enumerate(cells):
-                self.exercises_table.setItem(r, c, QTableWidgetItem(value))
-        self.exercises_table.selectRow(target)
-
-    def exercises(self) -> List[ExerciseDef]:
-        result: List[ExerciseDef] = []
-        for row in range(self.exercises_table.rowCount()):
-            if not self.cell_text(row, 0):
-                continue
-            result.append(self._row_to_exercise(row))
-        return result
-
-    def accept(self) -> None:
-        # Validate every Advanced cell so we never silently drop HIIT/extra data.
-        for row in range(self.exercises_table.rowCount()):
-            name = self.cell_text(row, 0)
-            try:
-                self._parse_advanced(self.cell_text(row, 4))
-            except Exception as exc:
-                QMessageBox.warning(
-                    self,
-                    APP_TITLE,
-                    f"Row {row + 1} ({name or 'unnamed'}) has invalid Advanced JSON:\n\n{exc}",
-                )
-                return
-        if not self.exercises():
-            QMessageBox.information(self, APP_TITLE, "Add at least one exercise with a name.")
-            return
-        super().accept()
-
-    def get_template(self) -> WorkoutTemplate:
-        extra = dict(self.template.extra)
-        extra["_default_rest_seconds"] = parse_positive_int(self.rest_edit.text(), 75)
-        return WorkoutTemplate(
-            name=self.template.name,
-            exercises=self.exercises(),
-            warmup_notes=self.warmup_edit.toPlainText().strip(),
-            extra=extra,
         )
 
 
@@ -4881,23 +4412,11 @@ class WorkoutBuilder(QWidget):
 
         self.progress_label = QLabel("0 / 0 completed")
 
-        self.edit_template_btn = QPushButton("Edit template...")
-        self.edit_template_btn.setToolTip("Edit this workout template's exercises and rest. Saved workout history keeps its own snapshots.")
-        self.manage_template_btn = QPushButton("Manage ▾")
-        self.manage_template_btn.setToolTip("Create, rename, or delete workout templates.")
-        manage_menu = QMenu(self.manage_template_btn)
-        self.new_template_action = manage_menu.addAction("New template...")
-        self.rename_template_action = manage_menu.addAction("Rename template...")
-        self.delete_template_action = manage_menu.addAction("Delete template...")
-        self.manage_template_btn.setMenu(manage_menu)
-
         header_layout.addWidget(QLabel("Template"), 0, 0)
         header_layout.addWidget(self.template_combo, 0, 1)
         header_layout.addWidget(QLabel("Date"), 0, 2)
         header_layout.addWidget(self.date_edit, 0, 3)
         header_layout.addWidget(self.progress_label, 0, 4)
-        header_layout.addWidget(self.edit_template_btn, 0, 5)
-        header_layout.addWidget(self.manage_template_btn, 0, 6)
         header_layout.addWidget(QLabel("Warm-up Notes"), 1, 0, Qt.AlignmentFlag.AlignTop)
         header_layout.addWidget(self.warmup_notes, 1, 1, 1, 4)
         outer.addWidget(header_box)
@@ -4951,10 +4470,6 @@ class WorkoutBuilder(QWidget):
         self.embedded_beep_sound = make_beep_sound(self)
 
         self.template_combo.currentTextChanged.connect(self._on_template_changed)
-        self.edit_template_btn.clicked.connect(self.edit_selected_template)
-        self.new_template_action.triggered.connect(self.new_workout_template)
-        self.rename_template_action.triggered.connect(self.rename_selected_workout_template)
-        self.delete_template_action.triggered.connect(self.delete_selected_workout_template)
         self.mark_all_btn.clicked.connect(self.mark_all_done)
         self.clear_checks_btn.clicked.connect(self.clear_checks)
         self.reset_template_btn.clicked.connect(self.reset_fields)
@@ -4984,7 +4499,6 @@ class WorkoutBuilder(QWidget):
         self.start_hiit_timer_btn.setEnabled(has_templates)
         self.start_rest_timer_btn.setEnabled(has_templates)
         self.reset_rest_timer_btn.setEnabled(has_templates)
-        self.edit_template_btn.setEnabled(has_templates)
         self.pause_rest_timer_btn.setEnabled(False)
         self.reset_rest_timer()
 
@@ -4993,16 +4507,11 @@ class WorkoutBuilder(QWidget):
         else:
             self.clear_rows()
             label = QLabel(
-                "No workout templates yet.\n\n"
-                "Create your first one to start logging workouts, no JSON editing required."
+                "No workout templates yet. Create one in the Config Editor tab (Workout Templates)."
             )
             label.setWordWrap(True)
             label.setStyleSheet("font-size: 14px; margin-top: 16px;")
             self.rows_layout.addWidget(label)
-            create_btn = QPushButton("Create your first template →")
-            create_btn.setToolTip("Create a new workout template and open the editor.")
-            create_btn.clicked.connect(self.new_workout_template)
-            self.rows_layout.addWidget(create_btn, alignment=Qt.AlignmentFlag.AlignLeft)
             power_user = QLabel(
                 "Power users can also add templates directly to "
                 "DATA/HealthTracker/WorkoutTracker/workout_templates.json (File > Open data folder)."
@@ -5012,96 +4521,6 @@ class WorkoutBuilder(QWidget):
             self.rows_layout.addWidget(power_user)
             self.rows_layout.addStretch(1)
             self.update_progress()
-
-    def edit_selected_template(self) -> None:
-        name = self.template_combo.currentText()
-        if name not in self.templates:
-            QMessageBox.information(self, APP_TITLE, "Select a workout template first.")
-            return
-
-        dialog = WorkoutTemplateEditDialog(self, self.templates[name])
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        try:
-            updated = self.templates.copy()
-            updated[name] = dialog.get_template()
-            self.store.set_templates(updated)
-        except Exception as exc:
-            QMessageBox.warning(self, APP_TITLE, f"Could not save the workout template.\n\n{exc}")
-            return
-
-        # Reload from disk and rebuild the visible builder. Saved workout-history
-        # entries carry their own exercise snapshots, so editing a template never
-        # rewrites logged workouts.
-        self.refresh_templates()
-        self.template_combo.setCurrentText(name)
-        QMessageBox.information(
-            self,
-            APP_TITLE,
-            "Workout template saved. Logged workouts keep their saved snapshots.",
-        )
-
-    def new_workout_template(self) -> None:
-        name, ok = QInputDialog.getText(self, APP_TITLE, "Name for the new workout template:")
-        if not ok or not stringify_value(name):
-            return
-        try:
-            display = self.store.create_workout_template(name)
-        except Exception as exc:
-            QMessageBox.warning(self, APP_TITLE, str(exc))
-            return
-
-        self.refresh_templates()
-        self.template_combo.setCurrentText(display)
-        # Open the editor immediately so the user fills the empty template.
-        if display in self.templates:
-            dialog = WorkoutTemplateEditDialog(self, self.templates[display])
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                try:
-                    updated = self.store.get_templates()
-                    updated[display] = dialog.get_template()
-                    self.store.set_templates(updated)
-                except Exception as exc:
-                    QMessageBox.warning(self, APP_TITLE, f"Could not save the workout template.\n\n{exc}")
-            self.refresh_templates()
-            self.template_combo.setCurrentText(display)
-
-    def rename_selected_workout_template(self) -> None:
-        old = self.template_combo.currentText()
-        if old not in self.templates:
-            QMessageBox.information(self, APP_TITLE, "Select a workout template first.")
-            return
-        new, ok = QInputDialog.getText(self, APP_TITLE, "New name for this workout template:", text=old)
-        if not ok or not stringify_value(new):
-            return
-        try:
-            display = self.store.rename_workout_template(old, new)
-        except Exception as exc:
-            QMessageBox.warning(self, APP_TITLE, str(exc))
-            return
-        self.refresh_templates()
-        self.template_combo.setCurrentText(display)
-
-    def delete_selected_workout_template(self) -> None:
-        target = self.template_combo.currentText()
-        if target not in self.templates:
-            QMessageBox.information(self, APP_TITLE, "Select a workout template first.")
-            return
-        confirm = QMessageBox.question(
-            self, APP_TITLE,
-            f"Delete workout template '{target}'?\n\nLogged workouts that used it keep their saved snapshots.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            self.store.delete_workout_template(target)
-        except Exception as exc:
-            QMessageBox.warning(self, APP_TITLE, str(exc))
-            return
-        self.refresh_templates()
 
     def clear_rows(self) -> None:
         while self.rows_layout.count():
@@ -7087,6 +6506,18 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.workout_log_page, "Workout Log")
         self.tabs.addTab(self.workout_history_page, "Workout History")
 
+        # Config Editor tab: GUI editors for foods.json, the diet-config
+        # templates, and workout_templates.json, so these no longer need
+        # hand-editing JSON. The pages live in config_editor.py (also runnable
+        # standalone) and are lazily imported here so any failure in that module
+        # can never stop the core app from starting, the same resilience rule as
+        # the phone server.
+        try:
+            import config_editor
+            self.tabs.addTab(config_editor.make_editor_tabs(self.store), "Config Editor")
+        except Exception as exc:
+            print(f"[config-editor] tab disabled (load failed): {exc}", flush=True)
+
         # Refresh "today" on the Workout Log tab when the app has been left
         # open across midnight; picker showed yesterday otherwise.
         self.tabs.currentChanged.connect(self._on_main_tab_changed)
@@ -7119,7 +6550,11 @@ class MainWindow(QMainWindow):
         export_json_action.triggered.connect(self.backup_data_json_files)
 
         quit_action = QAction("Quit", self)
-        quit_action.triggered.connect(self.close)
+        # The app is tray-resident (setQuitOnLastWindowClosed(False)), so
+        # self.close() would only hide the window. File->Quit must fully exit
+        # the process; QApplication.quit() unwinds app.exec() so the atexit
+        # cloudflared cleanup still runs.
+        quit_action.triggered.connect(QApplication.quit)
 
         file_menu.addAction(open_folder_action)
         file_menu.addAction(show_paths_action)
@@ -7171,13 +6606,179 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, APP_TITLE, f"Backup folder created:\n{backup_folder}")
 
 
+# Run-at-startup, OS-aware. The two platforms are fully separate branches so
+# neither can crash the other: Windows uses the HKCU ...\Run registry key
+# (winreg is imported only inside the Windows branch, since it doesn't exist on
+# Linux); Linux drops an autostart .desktop in ~/.config/autostart. Anything
+# else (e.g. macOS) reports "unsupported" and the tray omits the toggle.
+RUN_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_REG_VALUE_NAME = "HealthTracker"
+
+
+def _autostart_target() -> tuple:
+    """Return (program, arguments) used to relaunch the app at login. When
+    frozen it is the exe itself; as source it is pythonw/python plus the
+    script, so no console window flashes on Windows."""
+    if getattr(sys, "frozen", False):
+        return sys.executable, ""
+    py = Path(sys.executable)
+    pyw = py.with_name("pythonw.exe")  # console-less launcher on Windows
+    launcher = pyw if pyw.exists() else py
+    return str(launcher), str(Path(__file__).resolve())
+
+
+def _linux_autostart_path() -> Path:
+    return Path.home() / ".config" / "autostart" / "healthtracker.desktop"
+
+
+def autostart_supported() -> bool:
+    return sys.platform.startswith("win") or sys.platform.startswith("linux")
+
+
+def autostart_is_enabled() -> bool:
+    if sys.platform.startswith("win"):
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_REG_PATH) as key:
+                winreg.QueryValueEx(key, RUN_REG_VALUE_NAME)
+            return True
+        except OSError:
+            return False
+    if sys.platform.startswith("linux"):
+        return _linux_autostart_path().exists()
+    return False
+
+
+def autostart_enable() -> None:
+    program, arguments = _autostart_target()
+    if sys.platform.startswith("win"):
+        import winreg
+        command = f'"{program}"' + (f' "{arguments}"' if arguments else "")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, RUN_REG_VALUE_NAME, 0, winreg.REG_SZ, command)
+        return
+    if sys.platform.startswith("linux"):
+        exec_command = f'"{program}"' + (f' "{arguments}"' if arguments else "")
+        icon_path = find_data_or_resource_file(APP_ICON_FILE)
+        desktop = (
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            f"Name={APP_TITLE}\n"
+            "Comment=Personal home fitness tracker\n"
+            f"Exec={exec_command}\n"
+            f"Icon={icon_path}\n"
+            "Terminal=false\n"
+            "X-GNOME-Autostart-enabled=true\n"
+        )
+        path = _linux_autostart_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(desktop, encoding="utf-8")
+        return
+
+
+def autostart_disable() -> None:
+    if sys.platform.startswith("win"):
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, RUN_REG_VALUE_NAME)
+        except OSError:
+            pass
+        return
+    if sys.platform.startswith("linux"):
+        _linux_autostart_path().unlink(missing_ok=True)
+        return
+
+
+# System-tray residence: instead of a permanent taskbar entry and an always-open
+# window, the app lives in the tray and opens the GUI on demand. Closing the
+# window hides it back to the tray; Quit (tray menu or File->Quit) is the only
+# thing that exits the process.
+class HealthTrayIcon(QSystemTrayIcon):
+    def __init__(self, app: QApplication, window: "MainWindow"):
+        super().__init__()
+        self.app = app
+        self.window = window
+
+        icon_path = find_data_or_resource_file(APP_ICON_FILE)
+        if icon_path.exists():
+            self.setIcon(QIcon(str(icon_path)))
+        self.setToolTip(f"{APP_TITLE} v{APP_VERSION}")
+
+        menu = QMenu()
+        action_open = menu.addAction("Open GUI")
+        action_open.triggered.connect(self.open_gui)
+
+        if autostart_supported():
+            menu.addSeparator()
+            self.action_autostart = QAction("Run at startup", self)
+            self.action_autostart.setCheckable(True)
+            self.action_autostart.setChecked(autostart_is_enabled())
+            self.action_autostart.toggled.connect(self.toggle_autostart)
+            menu.addAction(self.action_autostart)
+
+        menu.addSeparator()
+        action_quit = menu.addAction("Quit")
+        action_quit.triggered.connect(self.quit_app)
+        self.setContextMenu(menu)
+        self._menu = menu  # keep a reference so Qt does not GC the menu
+        self.activated.connect(self.on_activated)
+
+    def on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        # Left-click (Trigger) or double-click opens the GUI; right-click shows
+        # the context menu. Some Linux DEs only emit Trigger, others only the
+        # menu, so the "Open GUI" item covers every case.
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self.open_gui()
+
+    def open_gui(self) -> None:
+        self.window.show()
+        self.window.raise_()
+        self.window.activateWindow()
+
+    def toggle_autostart(self, checked: bool) -> None:
+        try:
+            if checked:
+                autostart_enable()
+            else:
+                autostart_disable()
+        except OSError as exc:
+            QMessageBox.warning(None, APP_TITLE, f"Could not update the startup setting:\n{exc}")
+            # Re-sync the checkbox to the real state without re-firing toggled.
+            self.action_autostart.blockSignals(True)
+            self.action_autostart.setChecked(autostart_is_enabled())
+            self.action_autostart.blockSignals(False)
+
+    def quit_app(self) -> None:
+        self.hide()
+        self.app.quit()
+
+
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_TITLE)
     apply_app_icon(app)
+
+    # Built once at startup (not lazily) because MainWindow.__init__ starts the
+    # phone server + cloudflared tunnel; those must run even while the window is
+    # hidden in the tray. The same instance is shown/hidden, never recreated, so
+    # only one phone server is ever started.
     window = MainWindow()
     apply_app_icon(window)
-    window.show()
+
+    if QSystemTrayIcon.isSystemTrayAvailable():
+        # Tray-resident: start hidden, no taskbar entry, no window. Closing the
+        # window hides it back to the tray; the app lives on until Quit.
+        app.setQuitOnLastWindowClosed(False)
+        tray = HealthTrayIcon(app, window)
+        tray.show()
+    else:
+        # No system tray (bare environment): behave like a plain window app.
+        window.show()
+
     sys.exit(app.exec())
 
 
