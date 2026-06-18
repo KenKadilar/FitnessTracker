@@ -5,7 +5,7 @@ food calorie calculator, with an installable phone app (PWA) so you can tick
 off your diet checklist from anywhere. All data lives on your own machine as
 plain JSON; no cloud account.
 
-<img width="1000" height="705" alt="fitness-tracker-demo" src="https://github.com/user-attachments/assets/afee6a50-7be8-458a-968d-2e1dd478f25b" />
+<img width="1920" height="1080" alt="fitness-tracker-demo" src="https://github.com/user-attachments/assets/afee6a50-7be8-458a-968d-2e1dd478f25b" />
 
 ## Features
 
