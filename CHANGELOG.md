@@ -2,6 +2,17 @@
 
 All notable changes to Home Fitness Tracker.
 
+## [0.4.0]: Reload workout templates; inline export confirmations
+
+- **Workout Log "Reload templates" button**: re-reads `workout_templates.json`
+  from disk and rebuilds the view, so edits made directly in the JSON or via
+  the Config Editor show up without restarting (the workout-side counterpart to
+  the Diet Checklist's "Reload config"). Bad JSON is backed up and the current
+  in-memory templates are kept.
+- **Inline export confirmations**: Diet History and Workout History show a brief
+  "Exported: <file>" message next to the export buttons (for both Markdown and
+  PDF) instead of a modal popup; failure dialogs are unchanged.
+
 ## [0.3.0]: Unified Config Editor, tray residence, and fixes
 
 The diet and workout template editors are reworked into a single **Config

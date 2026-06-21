@@ -73,7 +73,7 @@ except Exception:  # QtMultimedia may be unavailable in some PyQt installs; fall
     QSoundEffect = None  # type: ignore
 
 APP_TITLE = "Home Fitness Tracker"
-APP_VERSION = "0.3"
+APP_VERSION = "0.4"
 APP_ICON_FILE = "icon.ico"
 BEEP_SOUND_FILE = "beep.wav"
 DATA_DIR_NAME = "DATA"
@@ -2283,6 +2283,23 @@ class UnifiedStore:
         self.data["workout"]["templates"] = serialize_templates(templates)
         write_json(self.workout_templates_path, self.data["workout"]["templates"])
 
+    def reload_workout_templates_file(self) -> None:
+        """Re-read workout_templates.json from disk into memory, so external
+        edits (hand-edited JSON or the Config Editor) show up without restarting.
+        Mirrors reload_foods_file(); bad JSON is backed up and the current
+        in-memory templates are kept."""
+        if not self.workout_templates_path.exists():
+            return
+        try:
+            loaded = read_json(self.workout_templates_path)
+            if not isinstance(loaded, dict):
+                raise ValueError("workout_templates.json must contain a JSON object.")
+            _ = deserialize_templates(loaded)  # validate before swapping in
+            self.data["workout"]["templates"] = loaded
+        except Exception as exc:
+            self.backup_file(self.workout_templates_path)
+            self.import_messages.append(f"Could not read workout_templates.json; kept current templates. Error: {exc}")
+
     def workout_history(self) -> List[dict]:
         return self.data["workout"].setdefault("history", [])
 
@@ -2943,10 +2960,13 @@ class DietHistoryPage(QWidget):
         self.pdf_all_btn = QPushButton("PDF: All Dates")
         self.pdf_last7_btn = QPushButton("PDF: Last 7 Dates")
         self.pdf_range_btn = QPushButton("PDF: Custom Range")
+        self.export_status = QLabel("")
+        self.export_status.setStyleSheet("color: #2e7d32; font-weight: bold;")
         button_row.addWidget(self.pdf_all_btn)
         button_row.addWidget(self.pdf_last7_btn)
         button_row.addWidget(self.pdf_range_btn)
         button_row.addStretch(1)
+        button_row.addWidget(self.export_status)
         button_row.addWidget(self.export_all_btn)
         button_row.addWidget(self.export_selected_btn)
         root.addLayout(button_row)
@@ -3118,6 +3138,15 @@ class DietHistoryPage(QWidget):
 
         return "".join(lines)
 
+    def _flash_export_status(self, message: str) -> None:
+        """Brief inline confirmation next to the export buttons instead of a
+        modal popup; clears itself after a few seconds."""
+        self.export_status.setText(message)
+        QTimer.singleShot(
+            6000,
+            lambda: self.export_status.setText("") if self.export_status.text() == message else None,
+        )
+
     def export_selected_to_markdown(self) -> None:
         row = self.list_widget.currentRow()
         if row < 0 or row >= len(self.visible_dates):
@@ -3135,7 +3164,7 @@ class DietHistoryPage(QWidget):
         if not path:
             return
         Path(path).write_text(self.entry_to_markdown(date_text), encoding="utf-8")
-        QMessageBox.information(self, APP_TITLE, f"Exported:\n{path}")
+        self._flash_export_status(f"Exported: {Path(path).name}")
 
     def export_all_history(self) -> None:
         default_path = health_report_named_path(self.store, "AllDietHistory", "md")
@@ -3160,7 +3189,7 @@ class DietHistoryPage(QWidget):
             parts.append("\n---\n\n")
 
         Path(path).write_text("".join(parts).rstrip() + "\n", encoding="utf-8")
-        QMessageBox.information(self, APP_TITLE, f"Exported:\n{path}")
+        self._flash_export_status(f"Exported: {Path(path).name}")
 
 
     # -----------------------------
@@ -3209,7 +3238,7 @@ class DietHistoryPage(QWidget):
                 f"Dates: {', '.join(dates)}"
             )
             export_html_pdf(Path(path), "Diet History Report", subtitle, body_html, landscape=False)
-            QMessageBox.information(self, APP_TITLE, f"Exported PDF:\n{path}")
+            self._flash_export_status(f"Exported PDF: {Path(path).name}")
         except Exception as exc:
             QMessageBox.critical(self, APP_TITLE, f"Diet PDF export failed:\n\n{exc}")
 
@@ -4412,11 +4441,17 @@ class WorkoutBuilder(QWidget):
 
         self.progress_label = QLabel("0 / 0 completed")
 
+        self.reload_templates_btn = QPushButton("Reload templates")
+        self.reload_templates_btn.setToolTip(
+            "Re-read workout_templates.json from disk (after editing it directly "
+            "or in the Config Editor) without restarting the app.")
+
         header_layout.addWidget(QLabel("Template"), 0, 0)
         header_layout.addWidget(self.template_combo, 0, 1)
-        header_layout.addWidget(QLabel("Date"), 0, 2)
-        header_layout.addWidget(self.date_edit, 0, 3)
-        header_layout.addWidget(self.progress_label, 0, 4)
+        header_layout.addWidget(self.reload_templates_btn, 0, 2)
+        header_layout.addWidget(QLabel("Date"), 0, 3)
+        header_layout.addWidget(self.date_edit, 0, 4)
+        header_layout.addWidget(self.progress_label, 0, 5)
         header_layout.addWidget(QLabel("Warm-up Notes"), 1, 0, Qt.AlignmentFlag.AlignTop)
         header_layout.addWidget(self.warmup_notes, 1, 1, 1, 4)
         outer.addWidget(header_box)
@@ -4470,6 +4505,7 @@ class WorkoutBuilder(QWidget):
         self.embedded_beep_sound = make_beep_sound(self)
 
         self.template_combo.currentTextChanged.connect(self._on_template_changed)
+        self.reload_templates_btn.clicked.connect(self.reload_templates_clicked)
         self.mark_all_btn.clicked.connect(self.mark_all_done)
         self.clear_checks_btn.clicked.connect(self.clear_checks)
         self.reset_template_btn.clicked.connect(self.reset_fields)
@@ -4478,6 +4514,14 @@ class WorkoutBuilder(QWidget):
         self.pause_rest_timer_btn.clicked.connect(self.toggle_rest_pause)
         self.reset_rest_timer_btn.clicked.connect(self.reset_rest_timer)
 
+        self.refresh_templates()
+
+    def reload_templates_clicked(self) -> None:
+        # Pull fresh templates off disk (the user just edited the JSON or used
+        # the Config Editor), then rebuild the list/view. Like the Diet
+        # Checklist's "Reload config", this rebuilds the current template, so any
+        # unsaved row state for today is reset.
+        self.store.reload_workout_templates_file()
         self.refresh_templates()
 
     def refresh_templates(self) -> None:
@@ -4847,12 +4891,15 @@ class WorkoutHistoryPage(QWidget):
         self.pdf_all_btn = QPushButton("PDF: All Dates")
         self.pdf_last7_btn = QPushButton("PDF: Last 7 Dates")
         self.pdf_range_btn = QPushButton("PDF: Custom Range")
+        self.export_status = QLabel("")
+        self.export_status.setStyleSheet("color: #2e7d32; font-weight: bold;")
         button_row.addWidget(self.edit_btn)
         button_row.addWidget(self.delete_btn)
         button_row.addWidget(self.pdf_all_btn)
         button_row.addWidget(self.pdf_last7_btn)
         button_row.addWidget(self.pdf_range_btn)
         button_row.addStretch(1)
+        button_row.addWidget(self.export_status)
         button_row.addWidget(self.export_all_btn)
         button_row.addWidget(self.export_btn)
         layout.addLayout(button_row)
@@ -4965,6 +5012,15 @@ class WorkoutHistoryPage(QWidget):
         except ValueError as exc:
             QMessageBox.warning(self, APP_TITLE, str(exc))
 
+    def _flash_export_status(self, message: str) -> None:
+        """Brief inline confirmation next to the export buttons (no modal popup);
+        clears itself after a few seconds."""
+        self.export_status.setText(message)
+        QTimer.singleShot(
+            6000,
+            lambda: self.export_status.setText("") if self.export_status.text() == message else None,
+        )
+
     def export_selected_entry(self) -> None:
         row = self.list_widget.currentRow()
         if row < 0 or row >= len(self.visible_entries):
@@ -4975,6 +5031,7 @@ class WorkoutHistoryPage(QWidget):
         if not path:
             return
         Path(path).write_text(self.entry_to_markdown(entry), encoding="utf-8")
+        self._flash_export_status(f"Exported: {Path(path).name}")
 
     def export_all_history(self) -> None:
         default_path = health_report_named_path(self.store, "AllWorkoutHistory", "md")
@@ -4997,6 +5054,7 @@ class WorkoutHistoryPage(QWidget):
             parts.append(self.entry_to_markdown(entry))
             parts.append("\n---\n\n")
         Path(path).write_text("".join(parts).rstrip() + "\n", encoding="utf-8")
+        self._flash_export_status(f"Exported: {Path(path).name}")
 
 
     # -----------------------------
@@ -5057,7 +5115,7 @@ class WorkoutHistoryPage(QWidget):
                 f"Workout entries: {len(entries)}"
             )
             export_html_pdf(Path(path), "Workout History Report", subtitle, body_html, landscape=False)
-            QMessageBox.information(self, APP_TITLE, f"Exported PDF:\n{path}")
+            self._flash_export_status(f"Exported PDF: {Path(path).name}")
         except Exception as exc:
             QMessageBox.critical(self, APP_TITLE, f"Workout PDF export failed:\n\n{exc}")
 
