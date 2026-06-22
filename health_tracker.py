@@ -73,7 +73,7 @@ except Exception:  # QtMultimedia may be unavailable in some PyQt installs; fall
     QSoundEffect = None  # type: ignore
 
 APP_TITLE = "Home Fitness Tracker"
-APP_VERSION = "0.4"
+APP_VERSION = "0.5"
 APP_ICON_FILE = "icon.ico"
 BEEP_SOUND_FILE = "beep.wav"
 DATA_DIR_NAME = "DATA"
@@ -3927,6 +3927,20 @@ def is_hiit_exercise(exercise: ExerciseDef) -> bool:
     return "(hiit)" in name or "hiit" in notes
 
 
+def is_no_rir_exercise(exercise: ExerciseDef) -> bool:
+    """True when an exercise is flagged to skip RIR (reps-in-reserve) tracking
+    for a non-HIIT reason: warm-ups, mobility, stretching, etc. Set via the
+    `no_rir` flag in the template (the Config Editor's "No RIR" toggle), so a
+    warm-up no longer has to be mislabeled as HIIT just to hide the RIR box.
+    Also honours exercise_type == 'mobility'/'warmup'."""
+    if exercise.exercise_type() in {"mobility", "warmup", "no_rir"}:
+        return True
+    value = first_present(exercise.extra, "no_rir", "noRir", "skip_rir")
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 def is_explicit_hiit_block(exercise: ExerciseDef) -> bool:
     """True only for a whole HIIT/circuit block.
 
@@ -4372,6 +4386,9 @@ class ExerciseRow(QWidget):
 
         if is_hiit_exercise(exercise) or is_explicit_hiit_block(exercise):
             self.rir_edit.setPlaceholderText("No RIR for HIIT")
+            self.rir_edit.setEnabled(False)
+        elif is_no_rir_exercise(exercise):
+            self.rir_edit.setPlaceholderText("No RIR (warm-up / mobility)")
             self.rir_edit.setEnabled(False)
 
         layout.addWidget(self.done_cb, 0, 0)

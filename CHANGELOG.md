@@ -2,6 +2,17 @@
 
 All notable changes to Home Fitness Tracker.
 
+## [0.5.0]: "No RIR" exercise toggle for warm-ups and mobility
+
+- **Per-exercise "No RIR" toggle** in the Config Editor's Workout Templates
+  editor. Flagging a warm-up or mobility move (wall slides, arm circles,
+  bodyweight squats, stretches) sets a `no_rir` flag, and the Workout Log then
+  disables the RIR (reps-in-reserve) box for that row, the same way it does for
+  HIIT, but without the HIIT label or timer. Previously the only way to hide the
+  RIR box was to mislabel the exercise as `(HIIT)`. `is_no_rir_exercise()` also
+  honours an `exercise_type` of `mobility` / `warmup` / `no_rir`. The flag
+  round-trips through the template JSON and saved history untouched.
+
 ## [0.4.0]: Reload workout templates; inline export confirmations
 
 - **Workout Log "Reload templates" button**: re-reads `workout_templates.json`

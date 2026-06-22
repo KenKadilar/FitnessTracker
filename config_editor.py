@@ -1235,8 +1235,11 @@ class WorkoutTemplateEditorPage(QWidget):
         ex_buttons.addStretch()
         ex_layout.addLayout(ex_buttons)
 
-        detail = QGroupBox("Selected exercise - HIIT / advanced (leave blank for a normal exercise)")
+        detail = QGroupBox("Selected exercise - options")
         detail_form = QFormLayout(detail)
+        self.no_rir_check = QCheckBox("No RIR (warm-up / mobility - hides the RIR box in the Workout Log)")
+        self.no_rir_check.toggled.connect(self._commit_no_rir)
+        detail_form.addRow("", self.no_rir_check)
         self.type_edit = QLineEdit()
         self.type_edit.setPlaceholderText("e.g. hiit_step - makes this a timed HIIT step")
         self.type_edit.editingFinished.connect(
@@ -1521,14 +1524,26 @@ class WorkoutTemplateEditorPage(QWidget):
         ex = self._selected_exercise()
         self._loading = True
         enabled = ex is not None
-        for widget in (self.type_edit, self.seconds_edit, self.rounds_edit, self.between_edit):
+        for widget in (self.no_rir_check, self.type_edit, self.seconds_edit, self.rounds_edit, self.between_edit):
             widget.setEnabled(enabled)
+        self.no_rir_check.setChecked(bool(ex.get("no_rir", False)) if ex else False)
         self.type_edit.setText(str(ex.get("type", "")) if ex else "")
         self.seconds_edit.setText(ht.format_number(ex.get("seconds", "")) if ex and "seconds" in ex else "")
         self.rounds_edit.setText(ht.format_number(ex.get("rounds", "")) if ex and "rounds" in ex else "")
         self.between_edit.setText(
             ht.format_number(ex.get("between_round_rest_seconds", "")) if ex and "between_round_rest_seconds" in ex else "")
         self._loading = False
+
+    def _commit_no_rir(self, checked: bool) -> None:
+        if self._loading:
+            return
+        ex = self._selected_exercise()
+        if ex is None:
+            return
+        if checked:
+            ex["no_rir"] = True
+        else:
+            ex.pop("no_rir", None)
 
     def _commit_ex_opt(self, key: str, value: str, numeric: bool) -> None:
         if self._loading:
