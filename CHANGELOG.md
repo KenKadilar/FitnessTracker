@@ -2,6 +2,15 @@
 
 All notable changes to Home Fitness Tracker.
 
+## [0.6.0]: "Add food to notes" picker on the Diet Checklist
+
+The Diet Checklist's log panel gains a food picker: search the foods from
+`foods.json` / the Food Calculator, pick one from the dropdown, type a gram
+amount, and click **Add to notes** (or press Enter in the grams box). It appends
+a line like `Apple, 200 grams, 100 kcal. ` to the day's Notes (kcal = grams ×
+`kcal_per_g`), each entry separated by a blank line, with a live `= N kcal`
+preview before adding. The note autosaves.
+
 ## [0.5.1]: "Warm-up Notes" relabeled to "Notes"
 
 The template-level note field is now labeled just **"Notes"** in the Workout

@@ -31,7 +31,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QAction, QColor, QFont, QIcon, QTextDocument, QPageLayout, QPageSize,
-    QPixmap, QPainter,
+    QPixmap, QPainter, QTextCursor,
 )
 from PyQt6.QtWidgets import (
     QApplication,
@@ -73,7 +73,7 @@ except Exception:  # QtMultimedia may be unavailable in some PyQt installs; fall
     QSoundEffect = None  # type: ignore
 
 APP_TITLE = "Home Fitness Tracker"
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.6.0"
 APP_ICON_FILE = "icon.ico"
 BEEP_SOUND_FILE = "beep.wav"
 DATA_DIR_NAME = "DATA"
@@ -2446,6 +2446,20 @@ class DietChecklistPage(QWidget):
         self.notes_edit = QPlainTextEdit()
         self.notes_edit.setPlaceholderText("Diet notes")
 
+        # Food -> notes quick add: search + pick a food (from foods.json / the
+        # Food Calculator), type grams, and append a "Name, X grams, Y kcal."
+        # line to the notes. kcal = grams * kcal_per_g.
+        self.food_note_search = QLineEdit()
+        self.food_note_search.setPlaceholderText("Search foods")
+        self.food_note_search.setClearButtonEnabled(True)
+        self.food_note_combo = QComboBox()
+        self.food_note_grams = QLineEdit()
+        self.food_note_grams.setPlaceholderText("grams")
+        self.food_note_grams.setMaximumWidth(90)
+        self.food_note_preview = QLabel("")
+        self.food_note_preview.setStyleSheet("color: #888888;")
+        self.add_food_note_btn = QPushButton("Add to notes")
+
         self.steps_edit = QLineEdit()
         self.steps_edit.setPlaceholderText("steps")
         self.steps_edit.setMaximumWidth(90)
@@ -2475,6 +2489,19 @@ class DietChecklistPage(QWidget):
         log_layout.addWidget(QLabel("Additional deficit / burned calories:"))
         log_layout.addWidget(self.additional_deficit_edit)
         log_layout.addLayout(step_line)
+
+        food_note_row1 = QHBoxLayout()
+        food_note_row1.addWidget(self.food_note_search, 2)
+        food_note_row1.addWidget(self.food_note_combo, 3)
+        food_note_row2 = QHBoxLayout()
+        food_note_row2.addWidget(self.food_note_grams)
+        food_note_row2.addWidget(QLabel("grams"))
+        food_note_row2.addWidget(self.food_note_preview, 1)
+        food_note_row2.addWidget(self.add_food_note_btn)
+        log_layout.addWidget(QLabel("Add food to notes:"))
+        log_layout.addLayout(food_note_row1)
+        log_layout.addLayout(food_note_row2)
+
         log_layout.addWidget(QLabel("Notes:"))
         log_layout.addWidget(self.notes_edit, 1)
         right_layout.addWidget(log_box, 1)
@@ -2501,6 +2528,13 @@ class DietChecklistPage(QWidget):
         self.additional_calories_edit.returnPressed.connect(lambda: self.evaluate_adjustment_field(self.additional_calories_edit))
         self.additional_deficit_edit.returnPressed.connect(lambda: self.evaluate_adjustment_field(self.additional_deficit_edit))
         self.notes_edit.textChanged.connect(self.on_free_text_changed)
+
+        self.food_note_search.textChanged.connect(self.refresh_food_note_picker)
+        self.food_note_combo.currentIndexChanged.connect(self.update_food_note_preview)
+        self.food_note_grams.textChanged.connect(self.update_food_note_preview)
+        self.food_note_grams.returnPressed.connect(self.add_food_to_notes)
+        self.add_food_note_btn.clicked.connect(self.add_food_to_notes)
+        self.refresh_food_note_picker()
 
         self.steps_edit.textChanged.connect(self.update_step_calculator)
         self.step_weight_edit.textChanged.connect(self.update_step_calculator)
@@ -2765,6 +2799,56 @@ class DietChecklistPage(QWidget):
     def update_step_calculator(self) -> None:
         burned = self.calculated_step_burn()
         self.step_result_label.setText(f"= {burned:.0f} kcal")
+
+    # --- Food -> notes quick add -------------------------------------------
+    def refresh_food_note_picker(self) -> None:
+        """Populate the food dropdown from foods.json, filtered by the search
+        box. Each item stores the food's kcal_per_g as its data."""
+        query = self.food_note_search.text().strip().lower()
+        self.food_note_combo.blockSignals(True)
+        self.food_note_combo.clear()
+        for food in self.store.get_foods():
+            name = str(food.get("name", "")).strip()
+            if not name or (query and query not in name.lower()):
+                continue
+            self.food_note_combo.addItem(name, parse_float(food.get("kcal_per_g", 0), 0.0))
+        self.food_note_combo.blockSignals(False)
+        self.update_food_note_preview()
+
+    def _food_note_kcal(self) -> Optional[float]:
+        if self.food_note_combo.currentIndex() < 0:
+            return None
+        grams = parse_float(self.food_note_grams.text(), 0.0)
+        if grams <= 0:
+            return None
+        return grams * parse_float(self.food_note_combo.currentData(), 0.0)
+
+    def update_food_note_preview(self) -> None:
+        kcal = self._food_note_kcal()
+        self.food_note_preview.setText(f"= {format_number(kcal, 0)} kcal" if kcal is not None else "")
+
+    def add_food_to_notes(self) -> None:
+        if self.food_note_combo.currentIndex() < 0 or not self.food_note_combo.currentText().strip():
+            QMessageBox.information(self, APP_TITLE, "Pick a food first.")
+            return
+        grams = parse_float(self.food_note_grams.text(), 0.0)
+        if grams <= 0:
+            QMessageBox.information(self, APP_TITLE, "Enter the grams first.")
+            return
+        name = self.food_note_combo.currentText().strip()
+        kcal = grams * parse_float(self.food_note_combo.currentData(), 0.0)
+        entry = f"{name}, {format_number(grams)} grams, {format_number(kcal, 0)} kcal. \n\n"
+
+        # Append at the end with a blank line before the entry if needed.
+        existing = self.notes_edit.toPlainText()
+        if existing and not existing.endswith("\n\n"):
+            sep = "\n" if existing.endswith("\n") else "\n\n"
+        else:
+            sep = ""
+        self.notes_edit.moveCursor(QTextCursor.MoveOperation.End)
+        self.notes_edit.insertPlainText(sep + entry)  # textChanged autosaves the note
+        self.food_note_grams.clear()
+        self.food_note_grams.setFocus()
 
     def evaluate_adjustment_field(self, field: QLineEdit) -> None:
         """Turn a typed kcal expression like 120+33 into 153 when Enter is pressed."""
