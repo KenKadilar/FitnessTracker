@@ -73,7 +73,7 @@ except Exception:  # QtMultimedia may be unavailable in some PyQt installs; fall
     QSoundEffect = None  # type: ignore
 
 APP_TITLE = "Home Fitness Tracker"
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 APP_ICON_FILE = "icon.ico"
 BEEP_SOUND_FILE = "beep.wav"
 DATA_DIR_NAME = "DATA"
@@ -6184,6 +6184,12 @@ async function renderDiet(){
   '<label>Additional deficit / burn</label><input id="f_ad" value="'+esc(f.additional_deficit)+'">'+
   '<label>Notes</label><textarea id="f_n">'+esc(f.note)+'</textarea>'+
   '<div class="muted">Saved automatically when you leave a field.</div></div>';
+ h+='<div class="card"><label>Add food to notes</label>'+
+  '<input id="fn_q" placeholder="search foods" oninput="dietFoodFilter()">'+
+  '<select id="fn_sel" onchange="dietFoodPrev()"></select>'+
+  '<div class="row" style="margin-top:6px"><input class="grow" id="fn_g" inputmode="decimal" placeholder="grams" oninput="dietFoodPrev()">'+
+  '<button onclick="dietFoodAdd()">Add to notes</button></div>'+
+  '<div class="muted" id="fn_prev"></div></div>';
  h+='<div class="card"><label>Step burn calculator (manual, not saved)</label>'+
   '<div class="row"><input class="grow" id="s_st" inputmode="numeric" placeholder="steps" value="'+esc(stepS)+'">'+
   '<input class="grow" id="s_wt" inputmode="decimal" placeholder="kg" value="'+esc(stepW)+'"></div>'+
@@ -6192,6 +6198,7 @@ async function renderDiet(){
  h+='</div>';
  E.innerHTML=h;
  ['f_w','f_ac','f_ad','f_n'].forEach(id=>{const el=document.getElementById(id);el.onblur=saveFields;});
+ dietFoodInit();
  const _ss=document.getElementById('s_st'),_sw=document.getElementById('s_wt');
  _ss.oninput=()=>{stepS=_ss.value;stepCalc();};
  _sw.oninput=()=>{stepW=_sw.value;stepCalc();};
@@ -6206,6 +6213,41 @@ async function saveFields(){try{
  updateSummary(s.summary);toast('Saved');
  }catch(e){toast(e.message);}}
 async function setTpl(t){try{await post('/api/diet/template',{date:dietDate,template:t});renderDiet();toast('Template set');}catch(e){toast(e.message);}}
+
+async function dietFoodInit(){
+ if(!foods){try{foods=(await api('/api/foods')).foods;}catch(e){return;}}
+ dietFoodFilter();
+}
+function dietFoodFilter(){
+ const sel=document.getElementById('fn_sel');if(!sel||!foods)return;
+ const qe=document.getElementById('fn_q');const q=(qe?qe.value:'').toLowerCase().trim();
+ const opts=foods.map((f,i)=>({i:i,f:f})).filter(o=>!q||o.f.name.toLowerCase().indexOf(q)>=0);
+ sel.innerHTML=opts.length?opts.map(o=>'<option value="'+o.i+'">'+esc(o.f.name)+'</option>').join(''):'<option value="-1">No match</option>';
+ dietFoodPrev();
+}
+function dietFoodKcal(){
+ const sel=document.getElementById('fn_sel');if(!sel||!foods||sel.value===''||sel.value==='-1')return null;
+ const g=parseFloat((document.getElementById('fn_g').value||'').replace(',','.'))||0;
+ if(g<=0)return null;return g*foods[sel.value].kcal_per_g;
+}
+function dietFoodPrev(){
+ const el=document.getElementById('fn_prev');if(!el)return;
+ const k=dietFoodKcal();el.textContent=(k==null)?'':('= '+Math.round(k)+' kcal');
+}
+async function dietFoodAdd(){
+ const sel=document.getElementById('fn_sel');
+ if(!sel||!foods||sel.value===''||sel.value==='-1'){toast('Pick a food');return;}
+ const g=parseFloat((document.getElementById('fn_g').value||'').replace(',','.'))||0;
+ if(g<=0){toast('Enter grams');return;}
+ const f=foods[sel.value];const kcal=Math.round(g*f.kcal_per_g);
+ const gstr=(g===Math.round(g))?String(Math.round(g)):String(g);
+ const entry=f.name+', '+gstr+' grams, '+kcal+' kcal. \\n\\n';
+ const n=document.getElementById('f_n');let cur=n.value,sep='';
+ if(cur&&!cur.endsWith('\\n\\n'))sep=cur.endsWith('\\n')?'\\n':'\\n\\n';
+ n.value=cur+sep+entry;
+ document.getElementById('fn_g').value='';dietFoodPrev();
+ await saveFields();
+}
 
 async function renderFood(){
  if(!foods){try{foods=(await api('/api/foods')).foods;}catch(e){E.innerHTML='<div class="card">'+esc(e.message)+'</div>';return;}}

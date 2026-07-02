@@ -2,6 +2,14 @@
 
 All notable changes to Home Fitness Tracker.
 
+## [0.7.0]: "Add food to notes" on the phone web app
+
+The phone/PWA Diet tab now has the same food picker as the desktop: a card under
+the log fields with a food search, a dropdown (foods from `/api/foods`), a grams
+box, a live `= N kcal` preview, and an **Add to notes** button that appends a
+`Name, X grams, Y kcal. ` line (blank line between entries) to the day's Notes
+and saves.
+
 ## [0.6.0]: "Add food to notes" picker on the Diet Checklist
 
 The Diet Checklist's log panel gains a food picker: search the foods from
